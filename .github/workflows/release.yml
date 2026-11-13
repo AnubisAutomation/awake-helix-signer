@@ -1,0 +1,315 @@
+name: Release
+
+# Builds every platform from a version tag (vX.Y.Z), checks each file's
+# .sha256, writes one SHA256SUMS (and manifest.json), attests the build
+# provenance of every release file and publishes the GitHub Release.
+#
+# Secrets (all optional; without the first two the Android APK is skipped and
+# the release notes say so):
+#   ANDROID_KEYSTORE_BASE64    base64 of the PKCS12 release keystore (.jks)
+#   ANDROID_KEYSTORE_PASSWORD  its store (= key) password
+#   ANDROID_KEY_ALIAS          key alias (default awake-helix-signer)
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build and publish, e.g. v0.5.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # GitHub-hosted runners: a small disk reserve, a short wait for load, and
+  # no cleanup of images and volumes at the end (the runner is discarded).
+  HELIX_MIN_FREE_GB: "2"
+  HELIX_WAIT_MAX: "120"
+  HELIX_KEEP_CACHE: "1"
+
+jobs:
+  meta:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      android: ${{ steps.android.outputs.enabled }}
+    steps:
+      - name: Tag format
+        run: |
+          printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "::error::'$TAG' is not a release tag (vX.Y.Z)"
+            exit 1
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Tag matches the workspace version
+        id: check
+        run: |
+          version=${TAG#v}
+          cargo=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
+          package=$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' app/package.json | head -n 1)
+          tauri=$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' app/src-tauri/tauri.conf.json | head -n 1)
+          echo "tag $TAG, Cargo.toml $cargo, app/package.json $package, tauri.conf.json $tauri"
+          for found in "$cargo" "$package" "$tauri"; do
+            if [ "$found" != "$version" ]; then
+              echo "::error::tag $TAG does not match the version $found in the repository; refusing to release"
+              exit 1
+            fi
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Android signing key available?
+        id: android
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
+        run: |
+          if [ "$HAS_KEYSTORE" = true ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Android skipped::The secrets ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD are not set, so no Android APK is built for $TAG and the release notes say it is missing."
+            echo "**Android skipped**: set the secrets ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD to build the APK." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  linux:
+    name: Linux (.deb, AppImage, CLI)
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Free disk space
+        run: sh .github/scripts/free-disk.sh
+      - name: Build
+        run: ./build.sh linux --release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-linux
+          path: dist/linux/
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows (setup .exe, CLI .exe)
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Free disk space
+        run: sh .github/scripts/free-disk.sh
+      - name: Build (cross-compiled with cargo-xwin)
+        run: ./build.sh windows --release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-windows
+          path: dist/windows/
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android (signed APK)
+    needs: meta
+    if: needs.meta.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Free disk space
+        run: sh .github/scripts/free-disk.sh
+      - name: Release keystore (outside the workspace, 0600)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          umask 077
+          dir="$RUNNER_TEMP/android-signing"
+          mkdir -p "$dir"
+          chmod 700 "$dir"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$dir/android-release.jks"
+          printf '%s' "$KEYSTORE_PASSWORD" > "$dir/android-release.password"
+          chmod 600 "$dir/android-release.jks" "$dir/android-release.password"
+          [ -s "$dir/android-release.jks" ] || { echo "::error::ANDROID_KEYSTORE_BASE64 does not decode to a keystore"; exit 1; }
+          {
+            echo "HELIX_ANDROID_KEYSTORE=$dir/android-release.jks"
+            echo "HELIX_ANDROID_KEYSTORE_PASSWORD_FILE=$dir/android-release.password"
+            echo "HELIX_ANDROID_KEY_ALIAS=${KEY_ALIAS:-awake-helix-signer}"
+          } >> "$GITHUB_ENV"
+      - name: Build
+        run: ./build.sh android --release --no-emulator
+      - name: Remove the keystore
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/android-signing"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-android
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS (universal .dmg, CLI)
+    needs: meta
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Pinned versions
+        id: versions
+        run: |
+          . build/versions.env
+          echo "node=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          package-manager-cache: false
+      - name: Rust toolchain with both macOS targets (universal build)
+        run: |
+          channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup target list --installed --toolchain "$channel"
+      - name: Build (ad-hoc signed, no GUI needed for the .dmg)
+        run: ./build.sh macos --release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-macos
+          path: dist/macos/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish the release
+    needs: [meta, linux, windows, android, macos]
+    if: >-
+      always() &&
+      needs.meta.result == 'success' &&
+      needs.linux.result == 'success' &&
+      needs.windows.result == 'success' &&
+      needs.macos.result == 'success' &&
+      (needs.android.result == 'success' ||
+       (needs.android.result == 'skipped' && needs.meta.outputs.android != 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      ANDROID_BUILT: ${{ needs.android.result == 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          path: artifacts
+      - name: Check every .sha256 and collect the release files
+        run: |
+          mkdir release
+          for dir in artifacts/dist-*; do
+            echo "== $dir"
+            (cd "$dir" && for sum in *.sha256; do sha256sum -c "$sum"; done)
+            for file in "$dir"/*; do
+              case $file in *.sha256|*/SHA256SUMS) continue ;; esac
+              [ -f "$file" ] || continue
+              [ -f "$file.sha256" ] || { echo "::error::$file has no .sha256"; exit 1; }
+              [ ! -e "release/$(basename "$file")" ] || { echo "::error::$(basename "$file") is in two artifacts"; exit 1; }
+              cp "$file" release/
+            done
+          done
+          ls -l release
+      - name: SHA256SUMS and manifest.json
+        run: |
+          # Refuses -debug builds, other versions and unknown file names.
+          python3 -I tools/release_manifest.py write release --version "$VERSION" --commit "$(git rev-parse HEAD)" > /dev/null
+          python3 -I tools/release_manifest.py verify release
+          (cd release && sha256sum -c SHA256SUMS)
+          cat release/SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      - name: Release notes
+        run: |
+          python3 -I - release "$VERSION" "$TAG" "$GITHUB_REPOSITORY" "$ANDROID_BUILT" > notes.md <<'EOF'
+          import json, sys
+          from pathlib import Path
+          folder, version, tag, repo, android = sys.argv[1:6]
+          manifest = json.loads((Path(folder) / "manifest.json").read_text(encoding="utf-8"))
+          systems = {"linux": "Linux", "windows": "Windows", "macos": "macOS", "android": "Android"}
+          labels = {"installer": "installer", "dmg": "app (.dmg)", "appimage": "AppImage",
+                    "deb": ".deb package", "apk": "APK", "cli": "command line"}
+          print(f"# Awake Helix Signer {version}\n")
+          print(f"Built from `{tag}` ({manifest['commit'][:12]}) by GitHub Actions; every file has a build provenance attestation.\n")
+          if android != "true":
+              print("> **Android is missing from this release**: the APK is published once the release signing key is configured.\n")
+          print("| File | Platform | Size | SHA-256 |")
+          print("|---|---|---:|---|")
+          for item in manifest["files"]:
+              size = f"{item['size'] / 1048576:.1f} MB"
+              print(f"| `{item['name']}` | {systems[item['os']]} {item['arch']}, {labels[item['kind']]} | {size} | `{item['sha256']}` |")
+          print(f"""
+          ## Verify a download
+
+          Compare the SHA-256 with `SHA256SUMS` (from this release):
+
+          ```sh
+          sha256sum -c SHA256SUMS --ignore-missing      # Linux
+          shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+          ```
+
+          ```powershell
+          (Get-FileHash .\\awake-helix-signer-{version}-windows-x64-setup.exe -Algorithm SHA256).Hash   # Windows: compare with SHA256SUMS
+          ```
+
+          Check that the file was built by this repository's release workflow (GitHub CLI):
+
+          ```sh
+          gh attestation verify <file> --repo {repo}
+          ```
+
+          The Windows installer is not code-signed and the macOS app is ad-hoc signed (not notarized):
+          see the README for the first launch on each system. Downloads are also listed at
+          https://anubis.sivilization.com/downloads/signer.
+          """)
+          EOF
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --title "Awake Helix Signer $VERSION" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" release/* --verify-tag --title "Awake Helix Signer $VERSION" \
+              --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi

@@ -1,0 +1,305 @@
+// The whole page against a scripted backend (the Tauri invoke layer mocked):
+// open link -> load key -> verified summary -> edit -> apply -> authorize,
+// and My grants -> revoke one, revoke all, cancel; plus link refusals and the
+// install check. The real backend is covered by the Rust tests and the
+// end-to-end test.
+import { setTransport, type CommandError, type Listing, type SessionView, type Transport } from "../src/api";
+import { handleUrl, start, store } from "../src/app";
+import { setLanguage } from "../src/i18n";
+import { initialGrants, initialRequest } from "../src/machines";
+import { Shell } from "../src/views/shell";
+
+const API = "https://anubis.sivilization.com";
+const OWNER = "0x814CEceE4ab7a2c37ED2F2C67bef5B325Ac53bDF";
+
+function session(calls: number, perCall = "10"): SessionView {
+  return {
+    kind: "grant",
+    confirmWord: "AUTHORIZE",
+    summary: `Owner: ${OWNER}\nCalls: at most ${calls} bot operations in total`,
+    editor: {
+      validUntil: 1794816462,
+      remainingCalls: calls,
+      bounds: { validUntil: { min: 1794000000, max: 1801000000 }, remainingCalls: { min: 2, max: 4096 } },
+      rules: [
+        { index: 0, method: "approve", unit: "DAI", decimals: 18, maxPerCall: perCall, maxPerDay: "10", bounds: { maxPerCall: { min: "10", max: "20" }, maxPerDay: { min: "10", max: "40" } } },
+      ],
+    },
+  };
+}
+
+function listing(revoked: string[] = []): Listing {
+  const row = (grantId: string, status: string) => ({
+    grantId, kind: "policy", status: revoked.includes(grantId) ? "revoked" : status, key: "0x70f6c48e3afc7e499ff2329d698474fd293626bc",
+    keyOrigin: "hosted", bot: "dai-power #12 (running)", validUntil: 1794816462, remainingCalls: 254,
+    revocable: !revoked.includes(grantId), active: !revoked.includes(grantId) && status === "active",
+  });
+  return { owner: OWNER.toLowerCase(), rows: [row("0xa1", "active"), row("0xb2", "active"), row("0xc3", "expired")], scanComplete: true, scanPercent: 100, truncated: false };
+}
+
+class FakeBackend implements Transport {
+  calls: [string, Record<string, unknown> | undefined][] = [];
+  handlers = new Map<string, ((payload: unknown) => void)[]>();
+  key: string | null = null;
+  revoked: string[] = [];
+  pending: string[] = [];
+  answers: Record<string, (args: Record<string, unknown>) => unknown> = {
+    app_info: () => ({ version: "0.5.0", os: "linux", arch: "x86_64", mobile: false, chainId: 6714, rpc: "https://rpc.anubispace.org", defaultApi: API, development: false, selftest: false, launchedForPing: false }),
+    initial_link: () => null,
+    open_link: ({ url }) => {
+      const value = String(url);
+      if (value.includes("api=https://evil")) throw { kind: "refused", message: "This link points to https://evil.example, which is not the official Awake Helix website" } satisfies CommandError;
+      const action = /^awakehelix:\/\/(\w+)/.exec(value)![1];
+      return { action, api: API, official: true };
+    },
+    close_request: () => null,
+    load_key: ({ source }) => {
+      const input = source as { kind: string; secret?: string };
+      if (input.kind === "privateKey" && input.secret !== "0x" + "11".repeat(32)) throw { kind: "refused", message: "The private key must be 64 hexadecimal characters." };
+      this.key = OWNER;
+      return { address: OWNER, source: input.kind, derivationPath: null };
+    },
+    key_status: () => (this.key ? { address: this.key, source: "privateKey", derivationPath: null } : null),
+    forget_key: () => {
+      this.key = null;
+      return null;
+    },
+    prepare_request: () => {
+      this.emit("signer://log", { scope: "request", line: "Fetching plan from https://anubis.sivilization.com ..." });
+      return session(256);
+    },
+    customize: ({ request }) => {
+      const body = request as { remainingCalls?: number; rules?: { maxPerCall: string }[] };
+      if (!("remainingCalls" in body)) return session(256);
+      if (body.remainingCalls! > 4096) throw { kind: "customize", message: "The call count must be between 2 and 4096." };
+      return session(body.remainingCalls!, body.rules?.[0]?.maxPerCall ?? "10");
+    },
+    sign: ({ word }) => {
+      if (word !== "AUTHORIZE") throw { kind: "refused", message: "Type AUTHORIZE exactly to sign." };
+      this.key = null;
+      return { txHash: "0x" + "ab".repeat(32), block: 101, reported: true, reportMessage: "" };
+    },
+    grants_load: () => listing(this.revoked),
+    grants_prepare: ({ grantIds }) => {
+      this.pending = (grantIds as string[] | null) ?? listing(this.revoked).rows.filter((row) => row.active).map((row) => row.grantId);
+      return { count: this.pending.length, summaries: this.pending.map((id) => `Revoke ${id}`) };
+    },
+    grants_confirm: () => {
+      const lines = this.pending.map((id, index) => {
+        this.revoked.push(id);
+        this.emit("signer://progress", { done: index + 1, total: this.pending.length });
+        return `Revoked ${id} in transaction 0x${index} (block ${102 + index}).`;
+      });
+      const total = this.pending.length;
+      this.pending = [];
+      return { done: total, total, cancelled: false, listing: listing(this.revoked), lines };
+    },
+    grants_cancel: () => {
+      this.pending = [];
+      return null;
+    },
+    setup_status: () => ({ os: "linux", mobile: false, handler: "awake-helix-signer-app.desktop", command: null, canRegister: true, canInstallCli: true, cliPlaces: ["/home/u/.local/bin"], firstRun: false }),
+    ping: () => ({ version: "0.5.0", os: "linux", arch: "x86_64", api: API }),
+  };
+
+  async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    this.calls.push([command, args]);
+    const answer = this.answers[command];
+    if (!answer) throw { kind: "error", message: `no fake for ${command}` };
+    return answer(args ?? {}) as T;
+  }
+  async listen<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+    const list = this.handlers.get(event) ?? [];
+    list.push(handler as (payload: unknown) => void);
+    this.handlers.set(event, list);
+    return () => undefined;
+  }
+  emit(event: string, payload: unknown): void {
+    (this.handlers.get(event) ?? []).forEach((handler) => handler(payload));
+  }
+  commands(): string[] {
+    return this.calls.map(([command]) => command);
+  }
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.querySelector<T>(`[data-testid="${id}"]`)!;
+const type = (id: string, value: string) => {
+  const input = $<HTMLInputElement>(id);
+  input.value = value;
+  input.dispatchEvent(new Event("input"));
+};
+const click = async (id: string) => {
+  $<HTMLButtonElement>(id).click();
+  for (let i = 0; i < 5; i++) await settle();
+};
+
+let backend: FakeBackend;
+
+beforeEach(async () => {
+  HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+  };
+  setLanguage("en");
+  Object.assign(store, { tab: "request", link: null, key: null, request: initialRequest, grants: initialGrants, logs: { request: [], grants: [] }, status: null, ping: null });
+  store.keyForm = { source: "keystore", path: "", json: "", fileName: "", index: "0" };
+  backend = new FakeBackend();
+  setTransport(backend);
+  document.body.replaceChildren(new Shell().root);
+  await start();
+  await settle();
+});
+
+describe("Request: link -> key -> summary -> edit -> authorize", () => {
+  it("runs the whole authorization", async () => {
+    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    expect($("request-heading").textContent).toBe("Authorize a hosted bot");
+    expect($("request-load").hidden).toBe(false);
+
+    // Private key: the secret leaves the field as soon as it is used.
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("request-load");
+    expect($<HTMLInputElement>("key-private").value).toBe("");
+    expect($("key-address").textContent).toContain(OWNER);
+    expect($("summary").textContent).toContain("at most 256 bot operations");
+    expect($("request-log").textContent).toContain("Fetching plan");
+    expect(store.request.phase).toBe("verified");
+
+    // Editing disables signing until the website re-planned and it was re-verified.
+    type("edit-calls", "200");
+    type("edit-call-0", "15");
+    type("confirm-word", "AUTHORIZE");
+    expect($<HTMLButtonElement>("sign").disabled).toBe(true);
+    await click("edit-apply");
+    const sent = backend.calls.find(([command]) => command === "customize")![1]!.request as Record<string, unknown>;
+    expect(sent).toEqual({ validUntil: 1794816462, remainingCalls: 200, rules: [{ index: 0, maxPerCall: "15", maxPerDay: "10" }] });
+    expect($("summary").textContent).toContain("at most 200 bot operations");
+    type("confirm-word", "AUTHORIZE");
+    expect($<HTMLButtonElement>("sign").disabled).toBe(false);
+
+    await click("sign");
+    expect(store.request.phase).toBe("done");
+    expect($("result").textContent).toContain("block 101");
+    expect($("result").textContent).toContain("The website was notified.");
+    expect(store.key).toBeNull(); // wiped after signing
+    expect(backend.commands()).toEqual(expect.arrayContaining(["open_link", "load_key", "prepare_request", "customize", "sign", "key_status"]));
+  });
+
+  it("keeps the plan when the website refuses an edit", async () => {
+    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("request-load");
+    type("edit-calls", "9999");
+    expect($("edit-error").textContent).toContain("outside the range");
+    await click("edit-apply");
+    expect(store.request.phase).toBe("verified");
+    expect($("edit-error").textContent).toContain("between 2 and 4096");
+    // The same refused values are not sent again.
+    await click("edit-apply");
+    expect(backend.commands().filter((command) => command === "customize")).toHaveLength(1);
+    // Back to the plan's values: signing is possible again.
+    type("edit-calls", "256");
+    type("confirm-word", "AUTHORIZE");
+    expect($<HTMLButtonElement>("sign").disabled).toBe(false);
+  });
+
+  it("refuses a wrong confirmation word and a bad key", async () => {
+    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x1234");
+    await click("request-load");
+    expect($("status").textContent).toContain("Refused: The private key must be 64 hexadecimal characters.");
+    expect(store.request.phase).toBe("ready");
+    type("key-private", "0x" + "11".repeat(32));
+    await click("request-load");
+    type("confirm-word", "authorize");
+    await click("sign");
+    expect($("status").textContent).toBe("Type AUTHORIZE exactly to sign.");
+    expect(backend.commands()).not.toContain("sign");
+  });
+
+  it("refuses foreign websites, unknown links and asks before discarding a verified plan", async () => {
+    await handleUrl("awakehelix://sign?plan=xxxxxxxxxxxxxxxxxxxxxxxx&api=https://evil.example");
+    expect($("status").textContent).toContain("Refused link: This link points to https://evil.example");
+    await handleUrl("https://anubis.sivilization.com");
+    expect($("status").textContent).toBe("Only awakehelix:// links are accepted.");
+    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("request-load");
+    const opening = handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    await settle();
+    await click("confirm-no");
+    await opening;
+    expect(store.request.phase).toBe("verified");
+    const again = handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    await settle();
+    await click("confirm-yes");
+    await again;
+    expect($("request-heading").textContent).toBe("Revoke a hosted-bot grant");
+  });
+
+  it("opens a pasted plan token as a sign link", async () => {
+    type("paste-input", "T".repeat(30));
+    await click("paste-open");
+    expect(backend.calls.find(([command]) => command === "open_link")![1]).toEqual({ url: `awakehelix://sign?plan=${"T".repeat(30)}` });
+  });
+});
+
+describe("My grants", () => {
+  it("signs in, lists, revokes one after REVOKE, then revokes all", async () => {
+    await handleUrl("awakehelix://grants");
+    expect(store.tab).toBe("grants");
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("grants-load");
+    expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(3);
+    expect($("status").textContent).toContain("3 grant(s) on");
+    expect($<HTMLButtonElement>("grants-revoke-selected").disabled).toBe(true);
+
+    $<HTMLInputElement>("grant-select-0xa1").click();
+    await settle();
+    expect($<HTMLButtonElement>("grants-revoke-selected").disabled).toBe(false);
+    await click("grants-revoke-selected");
+    expect($("grants-log").textContent).toContain("Revoke 0xa1");
+    expect($<HTMLButtonElement>("grants-confirm").disabled).toBe(false);
+    type("grants-word", "revoke");
+    await click("grants-confirm");
+    expect($("status").textContent).toBe("Type REVOKE exactly to sign.");
+    type("grants-word", "REVOKE");
+    await click("grants-confirm");
+    expect($("status").textContent).toBe("Revoked 1 of 1 grant(s).");
+    expect(document.querySelector('[data-grant="0xa1"]')!.className).toContain("status-revoked");
+
+    await click("grants-revoke-all");
+    expect(backend.calls.filter(([command]) => command === "grants_prepare").at(-1)![1]).toEqual({ grantIds: null });
+    await click("grants-cancel");
+    expect($("status").textContent).toBe("Cancelled; nothing was signed.");
+    await click("grants-revoke-all");
+    type("grants-word", "REVOKE");
+    await click("grants-confirm");
+    expect($("status").textContent).toBe("Revoked 1 of 1 grant(s).");
+    expect($<HTMLButtonElement>("grants-revoke-all").disabled).toBe(true);
+  });
+
+  it("switches language everywhere", async () => {
+    $<HTMLSelectElement>("language").value = "ja";
+    $<HTMLSelectElement>("language").dispatchEvent(new Event("change"));
+    expect($("tab-grants").textContent).toBe("マイ権限");
+    expect($("grants-load").textContent).toBe("鍵を解錠して権限を読み込む");
+  });
+});
+
+describe("install check", () => {
+  it("answers a ping link in an overlay", async () => {
+    await handleUrl(`awakehelix://ping?token=${"P".repeat(32)}`);
+    expect($("ping-text").textContent).toContain("installed and linked");
+    await click("ping-close");
+    expect($("ping").hidden).toBe(true);
+  });
+});

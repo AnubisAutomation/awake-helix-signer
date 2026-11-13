@@ -1,0 +1,7 @@
+# The Rust toolchain every signer build uses (host and the build containers).
+# Cross targets are installed by the container images and build.sh, not
+# listed here, so a plain `cargo` on a developer machine downloads nothing extra.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

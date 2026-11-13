@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint (workflows, shell scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+      - name: shellcheck
+        run: shellcheck build.sh build/scripts/*.sh build/docker/install-node-rust.sh .github/scripts/*.sh
+
+  rust:
+    name: Core + CLI (clippy, tests, CLI and tools tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned versions
+        id: versions
+        run: |
+          . build/versions.env
+          {
+            echo "uv=$UV_VERSION"
+            echo "python=$PYTHON_VERSION"
+            echo "eth_account=$ETH_ACCOUNT_VERSION"
+          } >> "$GITHUB_OUTPUT"
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: |
+          channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The code is not rustfmt-formatted (no rustfmt.toml), so there is no fmt check.
+      - name: clippy (core, CLI)
+        run: cargo clippy --locked -p helix-signer-core -p helix-signer-cli --all-targets -- -D warnings
+      - name: cargo test (core, CLI)
+        run: cargo test --locked -p helix-signer-core -p helix-signer-cli
+      - name: Release build of the CLI
+        run: cargo build --locked --release -p helix-signer-cli
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ steps.versions.outputs.uv }}
+          python-version: ${{ steps.versions.outputs.python }}
+          enable-cache: false
+      - name: CLI tests against the HTTP fakes (tests/py)
+        env:
+          ETH_ACCOUNT: eth-account==${{ steps.versions.outputs.eth_account }}
+        run: uv run --no-project --with "$ETH_ACCOUNT" python -m unittest discover -s tests/py -p 'test_*.py' -v
+      - name: Release tools tests (tools)
+        env:
+          ETH_ACCOUNT: eth-account==${{ steps.versions.outputs.eth_account }}
+        run: uv run --no-project --with "$ETH_ACCOUNT" python -m unittest discover -s tools -p 'test_*.py' -v
+      - name: Attestation address is a release value
+        env:
+          ETH_ACCOUNT: eth-account==${{ steps.versions.outputs.eth_account }}
+        run: uv run --no-project --with "$ETH_ACCOUNT" python -I tools/check_attestation_address.py --release
+
+  app:
+    name: App tests (./build.sh test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HELIX_MIN_FREE_GB: "2"
+      HELIX_WAIT_MAX: "120"
+      # Ephemeral runner: skip the cleanup of images and volumes at the end.
+      HELIX_KEEP_CACHE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: sh .github/scripts/free-disk.sh
+      - name: App unit, frontend and desktop end-to-end tests
+        run: ./build.sh test
+      - name: Upload end-to-end screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-screenshots
+          path: dist/test
+          if-no-files-found: ignore
+          retention-days: 7

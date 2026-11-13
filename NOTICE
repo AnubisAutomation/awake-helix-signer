@@ -1,0 +1,13 @@
+Awake Helix Signer
+Copyright 2026 AnubisAutomation / Awake Helix
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party material:
+
+  BIP-39 wordlists (crates/helix-signer-core/wordlists/*.txt)
+    From the bitcoin/bips repository (https://github.com/bitcoin/bips,
+    bip-0039/), MIT-licensed. Copyright (c) the bitcoin/bips contributors.
+
+Compiled releases also contain the Rust crates listed in Cargo.lock and the
+npm packages listed in app/package-lock.json, each under its own license.

@@ -1,0 +1,36 @@
+# Awake Helix Signer in Rust: one core library used by the CLI and by the
+# Tauri app on Windows, macOS, Linux, Android and iOS.
+[workspace]
+resolver = "2"
+members = [
+    "crates/helix-signer-core",
+    "crates/helix-signer-cli",
+    "app/src-tauri",
+]
+# A plain `cargo build` / `cargo test` on a developer machine builds the core
+# and the CLI only; the app needs webkit2gtk (Linux) or a mobile toolchain and
+# is built by build.sh in its container (`cargo test -p helix-signer-app` there).
+default-members = [
+    "crates/helix-signer-core",
+    "crates/helix-signer-cli",
+]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.85"
+
+# The keystore KDFs (scrypt n = 2^18, PBKDF2) run for tens of seconds per call
+# unoptimized; optimize just these crates in debug builds and tests.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3

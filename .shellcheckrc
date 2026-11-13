@@ -1,0 +1,3 @@
+# The build scripts source common.sh and versions.env through computed paths
+# (checked on their own), and pick the one bundle file a glob finds with ls.
+disable=SC1091,SC2012
