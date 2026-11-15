@@ -550,10 +550,10 @@ class PingTests(CliCase):
         token, body = self.world.fake.pings[0]
         self.assertEqual(token, self.TOKEN)
         self.assertEqual(set(body), {"version", "os", "arch"})
-        self.assertEqual(body["version"], "0.5.1")
+        self.assertEqual(body["version"], "0.5.2")
         method, _, headers, _ = self.world.fake.log[-1]
         self.assertEqual(method, "POST")
-        self.assertEqual(headers.get("User-Agent"), "awake-helix-signer/0.5.1")
+        self.assertEqual(headers.get("User-Agent"), "awake-helix-signer/0.5.2")
         self.assertEqual(headers.get("Content-Type"), "application/json")
         for status, fragment in ((404, "does not know"), (409, "already confirmed"), (410, "expired"), (429, "Too many"), (500, "refused")):
             self.world.fake.ping_status = status
@@ -607,7 +607,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(signed.code, 0, signed)
 
     def test_version_help_status(self) -> None:
-        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), "awake-helix-signer 0.5.1")
+        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), "awake-helix-signer 0.5.2")
         self.assertEqual(harness.run(BIN, ["--version", "sign"]).code, 0)
         help_text = harness.run(BIN, ["--help"])
         self.assertEqual(help_text.code, 0)
@@ -616,7 +616,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(harness.run(BIN, []).code, 2)
         status = harness.run(BIN, ["status"])
         self.assertEqual(status.code, 0, status)
-        self.assertIn("awake-helix-signer 0.5.1", status.stdout)
+        self.assertIn("awake-helix-signer 0.5.2", status.stdout)
         self.assertIn("awakehelix:// handler:", status.stdout)
         self.assertEqual(harness.run(BIN, ["--selftest"]).code, 0)
 
@@ -712,7 +712,7 @@ class CompanionTests(CliCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], SITE)
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual((body["name"], body["paired"], body["chainId"], body["version"], body["keyLoaded"], body["owner"]),
-                         ("awake-helix-signer", False, 6714, "0.5.1", True, self.owner))
+                         ("awake-helix-signer", False, 6714, "0.5.2", True, self.owner))
         self.assertTrue(body["constantsHash"].startswith("0x"))
         for origin in ("https://evil.example", "https://anubis.sivilization.com.evil.example", "null", None):
             status, headers, _ = self.request("GET", "/health", origin=origin)

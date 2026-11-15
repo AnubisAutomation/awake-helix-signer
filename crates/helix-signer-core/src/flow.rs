@@ -21,14 +21,17 @@ use crate::constants::{self as c, Constants, GrantKind};
 use crate::custom::{check_answer, CustomizeRequest};
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::KeyMaterial;
+use crate::message::Message;
+use crate::msg;
 use crate::net::{http_json, is_loopback, validate_url, Rpc, Transport};
 use crate::plan::{check_token, offline_revoke, unix_now, verify_grant_plan, verify_revoke_plan, GrantPlan, RevokePlan};
 use crate::pyfmt::py_str;
 use crate::summary::{dai, grant_summary, revoke_summary, PlanKind, Summary};
 use crate::website::Website;
 
-/// A progress callback receiving one line at a time.
-pub type Log<'a> = &'a dyn Fn(&str);
+/// A progress callback receiving one line at a time (its English text is
+/// ``line.text``; the app translates its code).
+pub type Log<'a> = &'a dyn Fn(&Message);
 
 /// Word the owner types to sign a grant.
 pub const AUTHORIZE: &str = "AUTHORIZE";
@@ -197,11 +200,14 @@ const WEBSITE_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn fetch_plan(api: &str, token: &str, transport: &Transport) -> Result<Value> {
     match http_json(transport.website.as_ref(), &plan_url(api, token), "GET", None, WEBSITE_TIMEOUT) {
         Ok(plan) => Ok(Value::Object(plan)),
-        Err(error) if error.kind() == ErrorKind::HttpStatus => Err(Error::flow(match error.status() {
-            Some(404) => "The website does not know this plan token. Copy the command again.".to_string(),
-            Some(410) => "This plan expired (15 minutes) or was already fetched once. Click the button on the dashboard again to get a new command.".to_string(),
-            Some(429) => "Too many requests; wait a minute and try again.".to_string(),
-            _ => format!("The website refused the plan: {error}"),
+        Err(error) if error.kind() == ErrorKind::HttpStatus => Err(Error::coded(ErrorKind::Flow, match error.status() {
+            Some(404) => msg!("flow.planUnknown", "The website does not know this plan token. Copy the command again."),
+            Some(410) => msg!(
+                "flow.planGone",
+                "This plan expired (15 minutes) or was already fetched once. Click the button on the dashboard again to get a new command."
+            ),
+            Some(429) => msg!("flow.tooManyRequests", "Too many requests; wait a minute and try again."),
+            _ => msg!("flow.planRefused", "The website refused the plan: {error}", error = &error),
         })),
         Err(error) => Err(error.into_kind(ErrorKind::Flow)),
     }
@@ -212,16 +218,26 @@ fn check_report_url(plan: &Value, api: &str, token: &str, log: Log) {
     match plan.get("reportUrl") {
         None | Some(Value::Null) => {}
         Some(Value::String(url)) if *url == expected => {}
-        Some(other) => log(&format!("Note: the plan names report URL {}; the signer reports to {expected}.", py_str(other))),
+        Some(other) => log(&msg!(
+            "log.reportUrl",
+            "Note: the plan names report URL {named}; the signer reports to {expected}.",
+            named = py_str(other),
+            expected = &expected
+        )),
     }
 }
 
 fn require_owner(material: Option<&KeyMaterial>, owner: &Address) -> Result<()> {
     match material {
-        Some(material) if material.address() != *owner => Err(Error::flow(format!(
-            "Wrong key: it controls {}, but this plan is for {owner}. Use the key of the wallet you are signed in with on the website (for a mnemonic, check --account-index).",
-            material.address()
-        ))),
+        Some(material) if material.address() != *owner => Err(Error::coded(
+            ErrorKind::Flow,
+            msg!(
+                "flow.wrongKey",
+                "Wrong key: it controls {key}, but this plan is for {owner}. Use the key of the wallet you are signed in with on the website (for a mnemonic, check --account-index).",
+                key = material.address(),
+                owner = owner
+            ),
+        )),
         _ => Ok(()),
     }
 }
@@ -229,7 +245,7 @@ fn require_owner(material: Option<&KeyMaterial>, owner: &Address) -> Result<()> 
 fn checked_state(rpc: &Rpc, owner: &Address, constants: &Constants, install: bool) -> Result<AccountState> {
     let state = chain::account_state(rpc, owner, constants)?;
     match chain::refuse_state(&state, install) {
-        Some(reason) => Err(Error::flow(reason)),
+        Some(reason) => Err(Error::coded(ErrorKind::Flow, reason)),
         None => Ok(state),
     }
 }
@@ -243,13 +259,17 @@ fn as_flow(error: Error) -> Error {
     }
 }
 
-fn wrapped(error: Error, prefix: &str, suffix: &str) -> Error {
+/// Plan, chain and network failures become a FlowError whose message wraps
+/// the cause (``wrap(cause)``); other errors pass unchanged.
+fn wrapped(error: Error, wrap: impl FnOnce(&Error) -> Message) -> Error {
     match error.kind() {
-        ErrorKind::Plan | ErrorKind::Chain | ErrorKind::Network | ErrorKind::HttpStatus => {
-            Error::flow(format!("{prefix}{}{suffix}", error.message()))
-        }
+        ErrorKind::Plan | ErrorKind::Chain | ErrorKind::Network | ErrorKind::HttpStatus => Error::coded(ErrorKind::Flow, wrap(&error)),
         _ => error,
     }
+}
+
+fn with_transaction(tx: &str) -> impl FnOnce(&Error) -> Message + '_ {
+    move |cause| msg!("flow.withTransaction", "{cause} (transaction {tx})", cause = cause, tx = tx)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -282,11 +302,11 @@ pub fn prepare_sign(
     check_token(token).map_err(as_flow)?;
     let api = validate_url(api, "Website API").map_err(as_flow)?;
     let rpc = Rpc::new(rpc_url, transport.rpc.clone()).map_err(as_flow)?;
-    log(&format!("Fetching plan from {api} ..."));
+    log(&msg!("log.fetchingPlan", "Fetching plan from {api} ...", api = &api));
     let raw = fetch_plan(&api, token, transport)?;
     let (plan, state) = (|| -> Result<(GrantPlan, AccountState)> {
         verify_grant_plan(&raw, constants, None)?;
-        log("Plan verified against the pinned constants. Checking the chain ...");
+        log(&msg!("log.planVerified", "Plan verified against the pinned constants. Checking the chain ..."));
         let chain_time = chain::check_chain(&rpc, constants)?;
         let plan = verify_grant_plan(&raw, constants, Some(chain_time.max(unix_now())))?;
         require_owner(material, &plan.owner)?;
@@ -308,7 +328,7 @@ pub fn customize(current: &Session, request: &CustomizeRequest, log: Log) -> Res
     let (Some(plan), Some(api), Some(token)) = (current.grant(), current.api.as_deref(), current.token.as_deref()) else {
         return Err(Error::flow("Only a website grant plan can be edited."));
     };
-    log("Asking the website to re-plan the grant with these values ...");
+    log(&msg!("log.askingReplan", "Asking the website to re-plan the grant with these values ..."));
     let body = json!({"grant": request});
     let url = format!("{}/customize", plan_url(api, token));
     let raw = match http_json(current.transport.website.as_ref(), &url, "POST", Some(&body), WEBSITE_TIMEOUT) {
@@ -316,14 +336,28 @@ pub fn customize(current: &Session, request: &CustomizeRequest, log: Log) -> Res
         Err(error) if error.kind() == ErrorKind::HttpStatus => {
             return Err(match error.status().unwrap_or(0) {
                 400 => {
+                    // The website's own message (its code, Chinese and English
+                    // texts); the command line prints the English one.
                     let english = error.body().get("errorEn").filter(|value| crate::pyfmt::truthy(value)).map(py_str);
-                    Error::customize_refused(english.unwrap_or_else(|| error.message().to_string()))
+                    let mut refused = error.msg().clone();
+                    if let Some(english) = english {
+                        refused.text = english;
+                    }
+                    Error::coded(ErrorKind::CustomizeRefused, refused)
                 }
-                429 => Error::customize_refused("Too many changes in a short time; wait a minute and try again."),
-                404 | 409 | 410 => Error::flow(format!(
-                    "This plan can no longer be edited ({error}). Nothing was signed. Press the button on the website's bot card again to get a new one."
-                )),
-                _ => Error::flow(format!("The website refused the change: {error}")),
+                429 => Error::coded(
+                    ErrorKind::CustomizeRefused,
+                    msg!("customize.tooMany", "Too many changes in a short time; wait a minute and try again."),
+                ),
+                404 | 409 | 410 => Error::coded(
+                    ErrorKind::Flow,
+                    msg!(
+                        "flow.editGone",
+                        "This plan can no longer be edited ({error}). Nothing was signed. Press the button on the website's bot card again to get a new one.",
+                        error = &error
+                    ),
+                ),
+                _ => Error::coded(ErrorKind::Flow, msg!("flow.editRefused", "The website refused the change: {error}", error = &error)),
             })
         }
         Err(error) => return Err(error.into_kind(ErrorKind::CustomizeRefused)),
@@ -335,8 +369,8 @@ pub fn customize(current: &Session, request: &CustomizeRequest, log: Log) -> Res
         let state = checked_state(&current.rpc, &verified.owner, &current.constants, true)?;
         Ok((verified, state))
     })()
-    .map_err(|error| wrapped(error, "The website's new plan was refused: ", ""))?;
-    log("New plan verified against the pinned constants.");
+    .map_err(|error| wrapped(error, |cause| msg!("flow.newPlanRefused", "The website's new plan was refused: {cause}", cause = cause)))?;
+    log(&msg!("log.newPlanVerified", "New plan verified against the pinned constants."));
     let summary = grant_summary(&verified, &state, Some(api), &current.rpc.url, &current.constants);
     let mut next = current.clone();
     next.plan = VerifiedPlan::Grant(verified);
@@ -380,7 +414,7 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
     let (plan, state) = (|| -> Result<(RevokePlan, AccountState)> {
         let mut plan = match (&source, &token, &api) {
             (RevokeSource::Plan { .. }, Some(token), Some(api)) => {
-                log(&format!("Fetching revoke plan from {api} ..."));
+                log(&msg!("log.fetchingRevokePlan", "Fetching revoke plan from {api} ...", api = api));
                 let raw = fetch_plan(api, token, transport)?;
                 let plan = verify_revoke_plan(&raw, constants)?;
                 check_report_url(&raw, api, token, log);
@@ -399,20 +433,28 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
         let live = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)?;
         let Some(live) = live else {
-            return Err(Error::flow(format!(
-                "Grant {} is not active on chain (already revoked or never installed); nothing to sign. The dashboard detects a revocation on chain by itself.",
-                plan.grant_id
-            )));
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.grantNotActive",
+                    "Grant {grant} is not active on chain (already revoked or never installed); nothing to sign. The dashboard detects a revocation on chain by itself.",
+                    grant = plan.grant_id.as_str()
+                ),
+            ));
         };
         let detect = matches!(source, RevokeSource::Offline { kind: None, .. });
         if detect && live != plan.grant_kind {
             plan = offline_revoke(&plan.owner.to_checksum(), &plan.grant_id, live.as_str(), constants)?;
         } else if live != plan.grant_kind {
-            return Err(Error::flow(format!(
-                "On chain this is a {} grant, but the plan revokes a {} grant.",
-                live.as_str(),
-                plan.grant_kind.as_str()
-            )));
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.kindMismatch",
+                    "On chain this is a {live} grant, but the plan revokes a {planned} grant.",
+                    live = live.as_str(),
+                    planned = plan.grant_kind.as_str()
+                ),
+            ));
         }
         Ok((plan, state))
     })()
@@ -453,14 +495,19 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
         };
         let (gas, how) = chain::estimate_gas(rpc, &owner, current.plan.data(), authorization.as_ref(), fallback)?;
         let cost = gas.saturating_mul(max_fee);
-        log(&format!("Gas limit {gas} ({how}); maximum fee {}.", dai(&cost)));
+        log(&msg!("log.gas", "Gas limit {gas} ({how}); maximum fee {fee}.", gas = gas, how = how, fee = dai(&cost)));
         if state.balance < cost {
-            return Err(Error::flow(format!(
-                "Not enough {} for gas: the owner has {}, the transaction may cost up to {}. Send some DAI to {owner} and run the command again (get a new command if the plan expired).",
-                c::GAS_SYMBOL,
-                dai(&state.balance),
-                dai(&cost)
-            )));
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.notEnoughGas",
+                    "Not enough {symbol} for gas: the owner has {balance}, the transaction may cost up to {cost}. Send some DAI to {owner} and run the command again (get a new command if the plan expired).",
+                    symbol = c::GAS_SYMBOL,
+                    balance = dai(&state.balance),
+                    cost = dai(&cost),
+                    owner = owner
+                ),
+            ));
         }
         let has_authorization = authorization.is_some();
         let signed = chain::sign_transaction(&material, constants, &owner, current.plan.data(), state.nonce, gas, max_fee, tip, authorization)?;
@@ -472,12 +519,12 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
     let tx_hash = signed.hash.clone();
     let tx_type = signed.tx_type;
     let receipt = (|| -> Result<Map<String, Value>> {
-        log(&format!("Broadcasting type-{tx_type} transaction {tx_hash} to {} ...", rpc.url));
+        log(&msg!("log.broadcasting", "Broadcasting type-{kind} transaction {tx} to {rpc} ...", kind = tx_type, tx = &tx_hash, rpc = rpc.url.as_str()));
         chain::broadcast(rpc, &signed.raw, &tx_hash)?;
-        log("Waiting for the receipt ...");
+        log(&msg!("log.waitingReceipt", "Waiting for the receipt ..."));
         chain::wait_receipt(rpc, &tx_hash, current.polling)
     })()
-    .map_err(|error| wrapped(error, "", &format!(" (transaction {tx_hash})")))?;
+    .map_err(|error| wrapped(error, with_transaction(&tx_hash)))?;
     Ok(Sent { tx_hash, tx_type, receipt })
 }
 
@@ -488,16 +535,15 @@ pub fn report(current: &Session, tx_hash: &str, log: Log) -> (bool, String) {
     };
     let url = format!("{}/report", plan_url(api, token));
     let attempts = 3;
-    let mut message = String::new();
+    let mut failure: Option<Error> = None;
     for attempt in 0..attempts {
         match http_json(current.transport.website.as_ref(), &url, "POST", Some(&json!({"txHash": tx_hash})), WEBSITE_TIMEOUT) {
             Ok(answer) => return (true, answer.get("status").map(py_str).unwrap_or_else(|| "ok".into())),
             Err(error) => {
-                message = error.message().to_string();
-                if let Some(status) = error.status() {
-                    if status < 500 && status != 429 {
-                        break;
-                    }
+                let stop = error.status().map(|status| status < 500 && status != 429).unwrap_or(false);
+                failure = Some(error);
+                if stop {
+                    break;
                 }
             }
         }
@@ -505,8 +551,13 @@ pub fn report(current: &Session, tx_hash: &str, log: Log) -> (bool, String) {
             std::thread::sleep(current.report_delay);
         }
     }
-    log(&format!("The website did not accept the report ({message}); the dashboard also detects the transaction on chain."));
-    (false, message)
+    let failure = failure.unwrap_or_else(|| Error::network(""));
+    log(&msg!(
+        "log.reportFailed",
+        "The website did not accept the report ({error}); the dashboard also detects the transaction on chain.",
+        error = &failure
+    ));
+    (false, failure.message().to_string())
 }
 
 fn receipt_number(receipt: &Map<String, Value>, key: &str) -> u64 {
@@ -522,9 +573,9 @@ pub fn execute_sign(current: &Session, material: KeyMaterial, log: Log) -> Resul
     let Some(plan) = current.grant() else { return Err(Error::flow("This session is not a grant.")) };
     let sent = send(current, material, log, true)?;
     chain::verify_install(&current.rpc, &plan.owner, &plan.grant_id, &plan.session_key, &sent.receipt, &current.constants)
-        .map_err(|error| wrapped(error, "", &format!(" (transaction {})", sent.tx_hash)))?;
+        .map_err(|error| wrapped(error, with_transaction(&sent.tx_hash)))?;
     let block = receipt_number(&sent.receipt, "blockNumber");
-    log(&format!("Confirmed in block {block}: delegation and grant verified on chain."));
+    log(&msg!("log.confirmedGrant", "Confirmed in block {block}: delegation and grant verified on chain.", block = block));
     let (reported, report_message) = report(current, &sent.tx_hash, log);
     Ok(Outcome {
         tx_hash: sent.tx_hash,
@@ -542,12 +593,16 @@ pub fn execute_revoke(current: &Session, material: KeyMaterial, log: Log) -> Res
     let VerifiedPlan::Revoke(plan) = &current.plan else { return Err(Error::flow("This session is not a revocation.")) };
     let sent = send(current, material, log, false)?;
     chain::verify_revoke(&current.rpc, &plan.owner, &plan.grant_id, plan.grant_kind, &current.constants)
-        .map_err(|error| wrapped(error, "", &format!(" (transaction {})", sent.tx_hash)))?;
+        .map_err(|error| wrapped(error, with_transaction(&sent.tx_hash)))?;
     let block = receipt_number(&sent.receipt, "blockNumber");
     if sent.tx_type == 4 {
-        log(&format!("Confirmed in block {block}: the account is delegated to Helix again and the grant is revoked on chain."));
+        log(&msg!(
+            "log.confirmedRedelegated",
+            "Confirmed in block {block}: the account is delegated to Helix again and the grant is revoked on chain.",
+            block = block
+        ));
     } else {
-        log(&format!("Confirmed in block {block}: the grant is revoked on chain."));
+        log(&msg!("log.confirmedRevoke", "Confirmed in block {block}: the grant is revoked on chain.", block = block));
     }
     let (reported, report_message) = report(current, &sent.tx_hash, log);
     Ok(Outcome {
@@ -591,17 +646,30 @@ pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, const
     let call = match site.revoke_call(grant_id) {
         Ok(call) => call,
         Err(error) if error.status() == Some(409) && error.body().get("reason").and_then(Value::as_str) == Some("otherDelegation") => {
-            return Err(Error::flow(format!(
-                "Grant {grant_id} cannot be revoked here: {}",
-                FOREIGN_DELEGATION
-            )))
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.foreignDelegation",
+                    "Grant {grant} cannot be revoked here: {reason}",
+                    grant = grant_id,
+                    reason = FOREIGN_DELEGATION
+                ),
+            ))
         }
         Err(error) if error.status() == Some(409) => {
-            log(&format!("Grant {grant_id} is already revoked or not on chain."));
+            log(&msg!("log.alreadyRevoked", "Grant {grant} is already revoked or not on chain.", grant = grant_id));
             return Ok(None);
         }
         Err(error) if error.kind() == ErrorKind::HttpStatus => {
-            return Err(Error::flow(format!("The website refused to prepare the revocation of {grant_id}: {error}")))
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.revokeRefused",
+                    "The website refused to prepare the revocation of {grant}: {error}",
+                    grant = grant_id,
+                    error = &error
+                ),
+            ))
         }
         Err(error) => return Err(as_flow(error)),
     };
@@ -610,19 +678,23 @@ pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, const
         chain::check_chain(&rpc, constants)?;
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
         let Some(live) = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)? else {
-            log(&format!("Grant {grant_id} is not active on chain; nothing to sign."));
+            log(&msg!("log.notActive", "Grant {grant} is not active on chain; nothing to sign.", grant = grant_id));
             return Ok(None);
         };
         if live != plan.grant_kind {
-            return Err(Error::flow(format!(
-                "On chain this is a {} grant, but the website revokes a {} grant.",
-                live.as_str(),
-                plan.grant_kind.as_str()
-            )));
+            return Err(Error::coded(
+                ErrorKind::Flow,
+                msg!(
+                    "flow.kindMismatchWebsite",
+                    "On chain this is a {live} grant, but the website revokes a {planned} grant.",
+                    live = live.as_str(),
+                    planned = plan.grant_kind.as_str()
+                ),
+            ));
         }
         Ok(Some((plan, state)))
     })()
-    .map_err(|error| wrapped(error, &format!("Grant {grant_id}: "), ""))?;
+    .map_err(|error| wrapped(error, |cause| msg!("flow.grantFailed", "Grant {grant}: {cause}", grant = grant_id, cause = cause)))?;
     let Some((plan, state)) = prepared else { return Ok(None) };
     let summary = revoke_summary(&plan, &state, Some(site.api()), &rpc.url, constants);
     Ok(Some(session(PlanKind::Revoke, VerifiedPlan::Revoke(plan), rpc, constants, state, summary, None, None, transport)))
@@ -642,7 +714,11 @@ pub fn execute_grant_revoke(current: &Session, material: &KeyMaterial, site: &We
             };
         }
         Err(error) if error.is_network() => {
-            log(&format!("The website did not accept the confirmation ({error}); it also detects the revocation on chain."));
+            log(&msg!(
+                "log.confirmFailed",
+                "The website did not accept the confirmation ({error}); it also detects the revocation on chain.",
+                error = &error
+            ));
             outcome.report_message = error.message().to_string();
         }
         Err(error) => return Err(error),

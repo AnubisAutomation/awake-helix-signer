@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::pyfmt::py_str;
 
 /// User-Agent of every request.
@@ -378,12 +378,12 @@ pub fn error_body(body: &[u8]) -> Map<String, Value> {
 /// Parse a successful JSON-object answer.
 pub fn json_object(body: &[u8], site: &str) -> Result<Map<String, Value>> {
     if body.len() > MAX_RESPONSE_BYTES {
-        return Err(Error::network(format!("Response from {site} is too large.")));
+        return Err(Error::coded(ErrorKind::Network, crate::msg!("network.tooLarge", "Response from {site} is too large.", site = site)));
     }
     match serde_json::from_slice::<Value>(body) {
         Ok(Value::Object(map)) => Ok(map),
-        Ok(_) => Err(Error::network(format!("{site} did not answer with a JSON object."))),
-        Err(_) => Err(Error::network(format!("{site} did not answer with JSON."))),
+        Ok(_) => Err(Error::coded(ErrorKind::Network, crate::msg!("network.notObject", "{site} did not answer with a JSON object.", site = site))),
+        Err(_) => Err(Error::coded(ErrorKind::Network, crate::msg!("network.notJson", "{site} did not answer with JSON.", site = site))),
     }
 }
 
@@ -427,7 +427,7 @@ pub fn http_json(client: &dyn HttpClient, url: &str, method: &str, body: Option<
     for _ in 0..=MAX_REDIRECTS {
         let response = client
             .send(&current)
-            .map_err(|error| Error::network(format!("Cannot reach {site}: {}", error.0)))?;
+            .map_err(|error| Error::coded(ErrorKind::Network, crate::msg!("network.unreachable", "Cannot reach {site}: {detail}", site = &site, detail = error.0.as_str())))?;
         if (200..300).contains(&response.status) {
             return json_object(&response.body, &site);
         }

@@ -2,14 +2,14 @@
 
 Usage::
 
-    python3 -I tools/release_manifest.py write DIR --version 0.5.1 [--commit SHA]
+    python3 -I tools/release_manifest.py write DIR --version 0.5.2 [--commit SHA]
     python3 -I tools/release_manifest.py verify DIR
 
 ``write`` lists every release file in DIR (the files ``build.sh
 <platform> --release`` writes to ``dist/<platform>/``, collected in
 one folder), derives os/arch/kind from the file name, and writes::
 
-    {"schema": 1, "name": "awake-helix-signer", "version": "0.5.1",
+    {"schema": 1, "name": "awake-helix-signer", "version": "0.5.2",
      "commit": "<sha>", "files": [{"name", "os", "arch", "kind", "size", "sha256"}, ...]}
 
 plus ``SHA256SUMS`` (``sha256sum -c`` format). The per-file ``<file>.sha256``

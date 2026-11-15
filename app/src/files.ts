@@ -1,6 +1,7 @@
 // File access through tauri-plugin-dialog and tauri-plugin-fs: a keystore is
 // read from a file the user picked, and an encrypted keystore is written only
 // where the user chose to save it. Nothing else touches the disk.
+import { t } from "./i18n";
 
 export interface PickedKeystore {
   /** Desktop: the path the backend reads. */
@@ -21,9 +22,9 @@ export async function pickKeystore(mobile: boolean): Promise<PickedKeystore | nu
   const chosen = await open({
     multiple: false,
     directory: false,
-    title: "Keystore JSON",
+    title: t("files.openTitle"),
     // Keystore files are often named UTC--…--address without an extension.
-    filters: mobile ? undefined : [{ name: "Keystore", extensions: ["json", "*"] }],
+    filters: mobile ? undefined : [{ name: t("files.filter"), extensions: ["json", "*"] }],
   });
   if (!chosen || Array.isArray(chosen)) return null;
   const path = String(chosen);
@@ -37,9 +38,9 @@ export async function saveKeystore(json: string, address: string): Promise<strin
   const [{ save }, { writeTextFile }] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
   const stamp = new Date().toISOString().replace(/[:]/g, "-").replace(/\.\d+Z$/, ".0Z");
   const path = await save({
-    title: "Encrypted keystore",
+    title: t("files.saveTitle"),
     defaultPath: `UTC--${stamp}--${address.toLowerCase().replace(/^0x/, "")}.json`,
-    filters: [{ name: "Keystore", extensions: ["json"] }],
+    filters: [{ name: t("files.filter"), extensions: ["json"] }],
   });
   if (!path) return null;
   await writeTextFile(path, json);

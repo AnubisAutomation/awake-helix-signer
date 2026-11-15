@@ -5,8 +5,10 @@
 #   2. Rust: the app crate's unit tests (command layer against a mock core) and
 #      its integration tests with the real core against the fake website/RPC;
 #      clippy on the app crate;
-#   3. end-to-end: the desktop app built with the dev-constants feature, driven
-#      by tauri-driver + WebKitWebDriver under Xvfb (app/e2e/run.mjs).
+#   3. end-to-end: the desktop app built with the dev-constants feature: its
+#      --selftest (every page in every language), then driven by tauri-driver +
+#      WebKitWebDriver under Xvfb (app/e2e/run.mjs), with screenshots of the
+#      request, grants and this-computer pages in zh-Hant, ja and es.
 #   build/scripts/test.sh [frontend|rust|e2e]...   (default: all three)
 . "$(dirname "$0")/common.sh"
 
@@ -33,6 +35,8 @@ for part in $parts; do
       [ -d app/node_modules/@tauri-apps/cli ] || frontend
       say "e2e: tauri build --debug --no-bundle --features dev-constants"
       (cd app && npx tauri build --debug --no-bundle --features dev-constants --ci)
+      say "e2e: app --selftest under Xvfb (every page in every language, language audit)"
+      (cd app && dbus-run-session -- xvfb-run -a -s "-screen 0 1280x900x24" "$CARGO_TARGET_DIR/debug/awake-helix-signer-app" --selftest)
       say "e2e: tauri-driver + WebKitWebDriver under Xvfb"
       (cd app && E2E_OUT="$results" dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1000x24" \
         node e2e/run.mjs "$CARGO_TARGET_DIR/debug/awake-helix-signer-app" "$HELIX_FAKES_PYTHON")

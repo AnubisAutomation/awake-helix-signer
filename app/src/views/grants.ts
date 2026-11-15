@@ -3,10 +3,10 @@
 import type { GrantRow } from "../api";
 import { cancelRevoke, confirmRevoke, loadGrants, prepareRevoke, selectGrant, store } from "../app";
 import { h } from "../dom";
-import { t } from "../i18n";
+import { formatDate, formatNumber, getLanguage, t } from "../i18n";
 import { short } from "../links";
 import { grantsButtons } from "../machines";
-import { show, syncLog, utcAndLocal } from "./common";
+import { show, syncLog } from "./common";
 
 // Statuses the website sends; a newer one renders with a neutral label.
 export const STATUS_KEYS = new Set(["active", "not_yet_valid", "inactive", "expired", "revoked", "exhausted", "unavailable", "missing"]);
@@ -20,6 +20,26 @@ export function statusText(status: string): string {
 /** CSS class of a row's status: known statuses only, anything else is neutral. */
 export function statusClass(status: string): string {
   return STATUS_KEYS.has(status) ? `status-${status}` : "status-other";
+}
+
+/** The linked bot in words: its script name and ID are data, the rest is translated. */
+export function botText(row: GrantRow): string {
+  const name = row.botScript || t("grants.bot.unnamed");
+  switch (row.botState) {
+    case "none":
+      return t("grants.bot.none");
+    case "unknown":
+      return t("grants.bot.unknown");
+    case "deleted":
+      return t("grants.bot.deleted", { name });
+    case "running":
+      return t("grants.bot.running", { name, id: row.botId || "?" });
+    case "stopped":
+      return t("grants.bot.stopped", { name, id: row.botId || "?" });
+    default:
+      // An older backend sends only the English text.
+      return row.bot;
+  }
 }
 
 /** Explanations for the statuses shown (dormant, foreign delegation, read failure, never installed). */
@@ -49,7 +69,8 @@ export class GrantsView {
   private cancelButton = h("button", { type: "button", class: "secondary", onclick: () => void cancelRevoke(), "data-testid": "grants-cancel" });
   private progress = h("progress", { max: 1, value: 0, "data-testid": "grants-progress" });
   private logTitle = h("h3", { class: "small-title" });
-  private logBox = h("pre", { class: "log", "data-testid": "grants-log" });
+  private logBox = h("div", { class: "log", "data-testid": "grants-log" });
+  private callsHelp = h("p", { class: "muted small", "data-testid": "grants-calls-help" });
 
   constructor() {
     this.confirmButton.addEventListener("click", () => void this.confirm());
@@ -60,6 +81,7 @@ export class GrantsView {
       this.help,
       h("div", { class: "row wrap" }, this.loadButton, this.revokeButton, this.revokeAllButton, h("span", { class: "spacer" }), this.scan),
       this.table,
+      this.callsHelp,
       this.notes,
       this.empty,
       h("div", { class: "row wrap sign-row" }, h("label", { class: "field inline" }, this.wordLabel, this.word), this.confirmButton, this.cancelButton, h("span", { class: "spacer" }), this.progress),
@@ -76,7 +98,7 @@ export class GrantsView {
   }
 
   private row(row: GrantRow): HTMLElement {
-    const until = row.validUntil ? utcAndLocal(row.validUntil) : null;
+    const until = row.validUntil ? { utc: formatDate(row.validUntil, "UTC"), local: formatDate(row.validUntil, "local") } : null;
     const select = h("input", {
       type: "radio",
       name: "grant",
@@ -86,18 +108,20 @@ export class GrantsView {
       onchange: () => selectGrant(row.grantId),
       "data-testid": `grant-select-${row.grantId}`,
     });
+    // Key, dates, counts and IDs are data; status and bot are words.
+    const data = new Set(["key", "until", "local", "calls", "grant"]);
     const cell = (column: string, value: string, extra = "") =>
-      h("span", { class: `cell ${extra}`, role: "cell", "data-label": t(`grants.col.${column}`) }, value);
+      h("span", { class: `cell ${extra}`, role: "cell", "data-label": t(`grants.col.${column}`), "data-raw": data.has(column) ? "" : undefined }, value);
     return h(
       "label",
       { class: `grant-row ${statusClass(row.status)}`, role: "row", "data-testid": "grant-row", "data-grant": row.grantId, "data-revocable": String(row.revocable) },
       h("span", { class: "cell pick" }, select),
       cell("status", statusText(row.status), "status"),
       cell("key", short(row.key), "mono"),
-      cell("bot", row.bot, "bot"),
+      cell("bot", botText(row), "bot"),
       cell("until", until?.utc ?? "-", "mono"),
       cell("local", until?.local ?? "-", "mono"),
-      cell("calls", row.remainingCalls === null ? "-" : String(row.remainingCalls)),
+      cell("calls", row.remainingCalls === null ? "-" : formatNumber(row.remainingCalls)),
       cell("grant", short(row.grantId), "mono"),
     );
   }
@@ -107,7 +131,13 @@ export class GrantsView {
       "div",
       { class: "grant-row head", role: "row" },
       h("span", { class: "cell pick" }),
-      ["status", "key", "bot", "until", "local", "calls", "grant"].map((column) => h("span", { class: "cell", role: "columnheader" }, t(`grants.col.${column}`))),
+      ["status", "key", "bot", "until", "local", "calls", "grant"].map((column) =>
+        h(
+          "span",
+          { class: "cell", role: "columnheader", title: column === "calls" ? t("editor.callsHelp") : undefined, "data-testid": `grants-col-${column}` },
+          t(`grants.col.${column}`),
+        ),
+      ),
     );
   }
 
@@ -132,10 +162,10 @@ export class GrantsView {
     const notes: string[] = [];
     if (listing && !listing.scanComplete) notes.push(t("grants.scanning", { percent: listing.scanPercent }));
     if (listing?.truncated) notes.push(t("grants.truncated"));
-    this.scan.textContent = notes.join(" · ");
-    if (this.listed !== listing || this.table.dataset.language !== document.documentElement.lang) {
+    this.scan.replaceChildren(...notes.map((note) => h("span", { class: "scan-note" }, note)));
+    if (this.listed !== listing || this.table.dataset.language !== getLanguage()) {
       this.listed = listing;
-      this.table.dataset.language = document.documentElement.lang;
+      this.table.dataset.language = getLanguage();
       this.table.replaceChildren(...(listing && listing.rows.length ? [this.header(), ...listing.rows.map((row) => this.row(row))] : []));
       this.notes.replaceChildren(...statusNotes(listing?.rows ?? []).map((text) => h("p", { class: "muted small grants-note" }, text)));
     }
@@ -145,6 +175,9 @@ export class GrantsView {
       input.disabled = state.phase !== "listed";
     });
     show(this.table, !!listing && listing.rows.length > 0);
+    // What "Calls allowed" means, under the list.
+    this.callsHelp.replaceChildren(h("strong", {}, t("grants.col.calls")), " ", h("span", {}, t("editor.callsHelp")));
+    show(this.callsHelp, !!listing && listing.rows.length > 0);
     show(this.empty, !!listing && listing.rows.length === 0);
     this.empty.textContent = t("grants.empty");
     show(this.progress, !!state.progress);

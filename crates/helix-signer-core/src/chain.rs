@@ -23,7 +23,8 @@ use serde_json::{json, Map, Value};
 
 use crate::address::{hex0x, keccak, Address};
 use crate::constants::{self as c, Constants, GrantKind};
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
+use crate::message::Message;
 use crate::keys::KeyMaterial;
 use crate::net::Rpc;
 use crate::pyfmt::{py_repr, py_str, truthy};
@@ -104,19 +105,31 @@ fn code_bytes(code: &str) -> Result<Vec<u8>> {
 pub fn check_chain(rpc: &Rpc, constants: &Constants) -> Result<u64> {
     let chain = quantity(&rpc.call("eth_chainId", json!([]))?)?;
     if chain != U256::from(constants.chain_id) {
-        return Err(Error::chain(format!("The RPC is chain {chain}, not Anubis Chain {}.", constants.chain_id)));
+        return Err(Error::coded(
+            ErrorKind::Chain,
+            crate::msg!("chain.wrongChain", "The RPC is chain {chain}, not Anubis Chain {expected}.", chain = chain, expected = constants.chain_id),
+        ));
     }
     let implementation = constants.implementation.to_checksum();
     let code = py_str(&rpc.call("eth_getCode", json!([implementation, "latest"]))?);
     if ["0x", "0x0", ""].contains(&code.as_str()) {
-        return Err(Error::chain(format!("The delegate {implementation} has no code on this chain.")));
+        return Err(Error::coded(
+            ErrorKind::Chain,
+            crate::msg!("chain.noDelegateCode", "The delegate {implementation} has no code on this chain.", implementation = &implementation),
+        ));
     }
     if let Some(expected) = &constants.implementation_code_hash {
         let digest = hex0x(&keccak(&code_bytes(&code)?));
         if digest != expected.to_lowercase() {
-            return Err(Error::chain(format!(
-                "The delegate's code hash {digest} differs from the reviewed {expected}; refusing to sign."
-            )));
+            return Err(Error::coded(
+                ErrorKind::Chain,
+                crate::msg!(
+                    "chain.codeHash",
+                    "The delegate's code hash {digest} differs from the reviewed {expected}; refusing to sign.",
+                    digest = &digest,
+                    expected = expected.as_str()
+                ),
+            ));
         }
     }
     let block = rpc.call("eth_getBlockByNumber", json!(["latest", false]))?;
@@ -149,13 +162,14 @@ pub fn account_state(rpc: &Rpc, owner: &Address, constants: &Constants) -> Resul
 /// follow the same rule (``_install`` is kept for callers): a plain account is
 /// delegated by the transaction itself, a foreign delegation or a contract is
 /// refused.
-pub fn refuse_state(state: &AccountState, _install: bool) -> Option<String> {
+pub fn refuse_state(state: &AccountState, _install: bool) -> Option<Message> {
     match state.kind {
-        AccountKind::Other => Some(format!(
-            "This account is already delegated (EIP-7702) to another contract, {}. The signer never overwrites someone else's delegation: that contract may hold your wallet's settings or funds logic. Remove that delegation with the wallet that set it, or use a different (dedicated) account.",
-            state.target
+        AccountKind::Other => Some(crate::msg!(
+            "chain.otherDelegation",
+            "This account is already delegated (EIP-7702) to another contract, {target}. The signer never overwrites someone else's delegation: that contract may hold your wallet's settings or funds logic. Remove that delegation with the wallet that set it, or use a different (dedicated) account.",
+            target = state.target.as_str()
         )),
-        AccountKind::Contract => Some("This address is a contract, not an externally owned account.".into()),
+        AccountKind::Contract => Some(crate::msg!("chain.contractAccount", "This address is a contract, not an externally owned account.")),
         // A plain account may still store a dormant grant (its storage outlives the
         // delegation): a revocation re-delegates it in the same type-4 transaction.
         AccountKind::Plain | AccountKind::Pinned => None,
@@ -179,7 +193,7 @@ pub fn fees(rpc: &Rpc) -> Result<(U256, U256)> {
 pub fn sign_authorization(material: &KeyMaterial, constants: &Constants, nonce: u64) -> Result<Authorization> {
     let raw = material.raw()?;
     Authorization::sign(raw, constants.chain_id, constants.implementation, nonce + 1)
-        .ok_or_else(|| Error::key("The key was already wiped."))
+        .ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.wiped", "The key was already wiped.")))
 }
 
 fn rpc_authorization(authorization: &Authorization) -> Value {
@@ -199,7 +213,7 @@ fn margin(estimate: U256, extra: u64) -> U256 {
 
 /// Estimate the transaction's gas with a safety margin; returns the limit
 /// and how it was obtained.
-pub fn estimate_gas(rpc: &Rpc, owner: &Address, data: &str, authorization: Option<&Authorization>, fallback: u64) -> Result<(U256, String)> {
+pub fn estimate_gas(rpc: &Rpc, owner: &Address, data: &str, authorization: Option<&Authorization>, fallback: u64) -> Result<(U256, Message)> {
     let owner_text = owner.to_checksum();
     let call = json!({"from": owner_text, "to": owner_text, "data": data, "value": "0x0"});
     if let Some(authorization) = authorization {
@@ -207,7 +221,7 @@ pub fn estimate_gas(rpc: &Rpc, owner: &Address, data: &str, authorization: Optio
         with_list["authorizationList"] = json!([rpc_authorization(authorization)]);
         match rpc.call("eth_estimateGas", json!([with_list])).and_then(|value| quantity(&value)) {
             Ok(estimate) => {
-                return Ok((margin(estimate, AUTHORIZATION_GAS), "eth_estimateGas with authorizationList".into()))
+                return Ok((margin(estimate, AUTHORIZATION_GAS), crate::msg!("gas.authorizationList", "eth_estimateGas with authorizationList")))
             }
             Err(error) if error.is_network() => {}
             Err(error) => return Err(error),
@@ -215,10 +229,10 @@ pub fn estimate_gas(rpc: &Rpc, owner: &Address, data: &str, authorization: Optio
         let mut override_map = Map::new();
         override_map.insert(owner_text.clone(), json!({"code": format!("{DELEGATION_PREFIX}{}", &authorization.address.to_lower()[2..])}));
         return match rpc.call("eth_estimateGas", json!([call, "latest", Value::Object(override_map)])).and_then(|value| quantity(&value)) {
-            Ok(estimate) => Ok((margin(estimate, 2 * AUTHORIZATION_GAS), "eth_estimateGas with a delegation override".into())),
+            Ok(estimate) => Ok((margin(estimate, 2 * AUTHORIZATION_GAS), crate::msg!("gas.override", "eth_estimateGas with a delegation override"))),
             Err(error) if error.is_network() => Ok((
                 U256::from(fallback),
-                "fixed fallback limit (the RPC could not estimate a type-4 transaction)".into(),
+                crate::msg!("gas.fallback", "fixed fallback limit (the RPC could not estimate a type-4 transaction)"),
             )),
             Err(error) => Err(error),
         };
@@ -226,11 +240,11 @@ pub fn estimate_gas(rpc: &Rpc, owner: &Address, data: &str, authorization: Optio
     let estimate = match rpc.call("eth_estimateGas", json!([call])).and_then(|value| quantity(&value)) {
         Ok(estimate) => estimate,
         Err(error) if error.is_network() => {
-            return Err(Error::chain(format!("The transaction would fail on chain: {error}")))
+            return Err(Error::coded(ErrorKind::Chain, crate::msg!("chain.wouldFail", "The transaction would fail on chain: {error}", error = &error)))
         }
         Err(error) => return Err(error),
     };
-    Ok((margin(estimate, 10_000), "eth_estimateGas".into()))
+    Ok((margin(estimate, 10_000), crate::msg!("gas.estimate", "eth_estimateGas")))
 }
 
 /// The signed raw transaction.
@@ -269,7 +283,7 @@ pub fn sign_transaction(
         data: calldata,
         authorization_list: authorization.map(|item| vec![item]),
     };
-    let (raw, hash) = transaction.sign(raw_key).ok_or_else(|| Error::key("The key was already wiped."))?;
+    let (raw, hash) = transaction.sign(raw_key).ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.wiped", "The key was already wiped.")))?;
     Ok(SignedTransaction { raw: hex0x(&raw), hash: hex0x(&hash), tx_type: transaction.tx_type() })
 }
 
@@ -305,16 +319,21 @@ pub fn wait_receipt(rpc: &Rpc, tx_hash: &str, polling: Polling) -> Result<Map<St
         if let Some(Value::Object(receipt)) = receipt {
             if receipt.get("blockNumber").map(truthy).unwrap_or(false) {
                 if receipt.get("status").and_then(Value::as_str) != Some("0x1") {
-                    return Err(Error::chain(format!("Transaction {tx_hash} reverted on chain.")));
+                    return Err(Error::coded(ErrorKind::Chain, crate::msg!("chain.reverted", "Transaction {tx} reverted on chain.", tx = tx_hash)));
                 }
                 return Ok(receipt);
             }
         }
         if Instant::now() >= deadline {
-            return Err(Error::chain(format!(
-                "Transaction {tx_hash} is not mined after {} s. Check it on https://browser.anubispace.org before trying again.",
-                polling.timeout.as_secs()
-            )));
+            return Err(Error::coded(
+                ErrorKind::Chain,
+                crate::msg!(
+                    "chain.notMined",
+                    "Transaction {tx} is not mined after {seconds} s. Check it on https://browser.anubispace.org before trying again.",
+                    tx = tx_hash,
+                    seconds = polling.timeout.as_secs()
+                ),
+            ));
         }
         std::thread::sleep(polling.interval);
     }

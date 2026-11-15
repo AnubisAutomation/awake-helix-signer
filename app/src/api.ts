@@ -3,6 +3,80 @@
 // preview swap the transport with setTransport().
 import type { CustomizeRequest, EditorPlan } from "./editor";
 
+/** A message of the core or the backend: a stable code, its values and the
+ * English text the command line prints (the page translates `core.<code>`). */
+export interface Msg {
+  code: string;
+  params: Record<string, string | Msg>;
+  text: string;
+  /** For code `website`: what the website answered. */
+  site?: SiteText;
+}
+
+/** A website error answer: its own code and params (newer websites), its
+ * Traditional Chinese text and its English text. */
+export interface SiteText {
+  status: number;
+  code: string;
+  params: Record<string, unknown>;
+  zh: string;
+  en: string;
+}
+
+/** The verified summary as data (helix_signer_core::Summary). */
+export interface RuleSummary {
+  index: number;
+  kind: number;
+  method: string;
+  target: string;
+  targetName: string;
+  spender: string | null;
+  spenderName: string;
+  swap: { tokenIn: string; tokenInName: string; tokenOut: string; tokenOutName: string; priceFloor: string } | null;
+  unit: string;
+  decimals: number;
+  maxPerCall: string;
+  maxPerDay: string;
+  activationDai: string | null;
+  deadlineSeconds: number | null;
+}
+
+export interface Summary {
+  kind: "grant" | "revoke";
+  signerVersion: string;
+  website: string | null;
+  officialWebsite: boolean;
+  chainId: number;
+  rpcUrl: string;
+  development: boolean;
+  owner: string;
+  transaction: string;
+  balance: string;
+  grant: {
+    delegates: boolean;
+    delegate: string;
+    codeHashVerified: boolean;
+    sessionKey: string;
+    botScript: string | null;
+    botId: string;
+    grantId: string;
+    validAfter: number;
+    validUntil: number;
+    remainingCalls: number;
+    rules: RuleSummary[];
+    customized: string[];
+  } | null;
+  revoke: {
+    method: string;
+    grantId: string;
+    grantKind: "policy" | "session";
+    delegation: string;
+    redelegates: boolean;
+    delegate: string;
+    delegateName: string;
+  } | null;
+}
+
 export interface AppInfo {
   version: string;
   os: "windows" | "macos" | "linux" | "android" | "ios";
@@ -38,7 +112,10 @@ export interface KeyView {
 export interface SessionView {
   kind: "grant" | "revoke";
   confirmWord: string;
+  /** English text (as the command line prints it). */
   summary: string;
+  /** The same summary as data: rendered in the selected language. */
+  summaryData: Summary;
   editor: EditorPlan | null;
 }
 
@@ -56,6 +133,10 @@ export interface GrantRow {
   key: string;
   keyOrigin: string;
   bot: string;
+  /** "none", "unknown", "deleted", "running" or "stopped". */
+  botState: string;
+  botScript: string;
+  botId: string;
   validUntil: number | null;
   remainingCalls: number | null;
   revocable: boolean;
@@ -77,6 +158,7 @@ export interface Listing {
 export interface Pending {
   count: number;
   summaries: string[];
+  summaryData: Summary[];
 }
 
 export interface RevokeOutcome {
@@ -84,7 +166,7 @@ export interface RevokeOutcome {
   total: number;
   cancelled: boolean;
   listing: Listing;
-  lines: string[];
+  lines: Msg[];
 }
 
 export interface SetupView {
@@ -108,12 +190,26 @@ export interface PingView {
 /** A refusal or error from a command. */
 export interface CommandError {
   kind: "refused" | "error" | "customize" | "busy" | "cancelled" | "nokey";
+  /** English text. */
   message: string;
+  /** What the page shows (translated by its code). */
+  msg?: Msg;
 }
 
 export interface LogEvent {
   scope: "request" | "grants";
   line: string;
+  msg?: Msg;
+}
+
+/** A message without a code of its own (shown as a headline of its kind and the text). */
+export function plainMsg(code: string, text: string): Msg {
+  return { code, params: {}, text };
+}
+
+/** The message of a command error (older shapes carry only the text). */
+export function errorMsg(error: CommandError): Msg {
+  return error.msg ?? plainMsg(error.kind === "error" ? "io" : "plan", error.message);
 }
 
 export interface Transport {
@@ -144,7 +240,8 @@ async function current(): Promise<Transport> {
 /** Normalise anything a command threw into a CommandError. */
 export function asError(error: unknown): CommandError {
   if (error && typeof error === "object" && "kind" in error && "message" in error) return error as CommandError;
-  return { kind: "error", message: error instanceof Error ? error.message : String(error) };
+  const message = error instanceof Error ? error.message : String(error);
+  return { kind: "error", message, msg: plainMsg("io", message) };
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -177,11 +274,13 @@ export const api = {
   grantsConfirm: (word: string) => call<RevokeOutcome>("grants_confirm", { word }),
   grantsCancel: () => call<void>("grants_cancel"),
   setupStatus: () => call<SetupView>("setup_status"),
-  registerLinks: () => call<string>("register_links"),
-  installCli: () => call<string>("install_cli"),
+  registerLinks: () => call<Msg>("register_links"),
+  installCli: () => call<Msg>("install_cli"),
   markFirstRun: () => call<void>("mark_first_run"),
   ping: (url: string) => call<PingView>("ping", { url }),
   touch: () => call<void>("touch"),
   selftestDone: (ok: boolean, detail: string) => call<void>("selftest_done", { ok, detail }),
+  /** The window title in the selected language. */
+  setTitle: (title: string) => call<void>("set_title", { title }),
   quit: () => call<void>("quit"),
 };

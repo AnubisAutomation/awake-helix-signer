@@ -34,7 +34,7 @@ fn world() -> World {
     World { fake, key, owner }
 }
 
-fn quiet(_: &str) {}
+fn quiet(_: &helix_signer_core::Message) {}
 
 impl World {
     fn serve(&self, plan: Value) {
@@ -62,7 +62,7 @@ fn plain_eoa_signs_one_type4_with_nonce_plus_one() {
     let plan = grant_plan(&world.owner, dai_power(), 7 * 86400, 256);
     world.serve(plan.clone());
     let lines = std::sync::Mutex::new(Vec::new());
-    let log = |line: &str| lines.lock().unwrap().push(line.to_string());
+    let log = |line: &helix_signer_core::Message| lines.lock().unwrap().push(line.text.clone());
     let session = fast(flow::prepare_sign(TOKEN, API, RPC, &constants(), Some(&world.key), &world.fake.transport(), &log).unwrap());
     assert_eq!(session.confirm_word(), "AUTHORIZE");
     let text = session.summary_text();
@@ -455,4 +455,92 @@ fn dev_constants_only_on_loopback() {
     let error = flow::load_constants(Some(&missing), "http://localhost:8545").unwrap_err();
     assert!(error.message().starts_with(&format!("Cannot read {}: [Errno 2] No such file or directory", missing.display())), "{error}");
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+// ------------------------------------------------- message codes (the app translates them)
+
+#[test]
+fn progress_lines_and_errors_carry_codes_and_params() {
+    let world = world();
+    world.serve(grant_plan(&world.owner, dai_power(), 7 * 86400, 256));
+    let lines = std::sync::Mutex::new(Vec::new());
+    let log = |line: &helix_signer_core::Message| lines.lock().unwrap().push(line.clone());
+    let session = fast(flow::prepare_sign(TOKEN, API, RPC, &constants(), Some(&world.key), &world.fake.transport(), &log).unwrap());
+    flow::execute_sign(&session, world.key.clone(), &log).unwrap();
+    let lines = lines.lock().unwrap();
+    let codes: Vec<&str> = lines.iter().map(|line| line.code).collect();
+    for code in ["log.fetchingPlan", "log.planVerified", "log.gas", "log.broadcasting", "log.waitingReceipt", "log.confirmedGrant"] {
+        assert!(codes.contains(&code), "{code}: {codes:?}");
+    }
+    let gas = lines.iter().find(|line| line.code == "log.gas").unwrap();
+    assert_eq!(gas.param("gas"), Some("385000"));
+    // The way the gas was estimated is a message of its own.
+    let how = serde_json::to_value(gas).unwrap();
+    assert_eq!(how["params"]["how"]["code"], "gas.authorizationList");
+    let fetching = lines.iter().find(|line| line.code == "log.fetchingPlan").unwrap();
+    assert_eq!((fetching.param("api"), fetching.text.as_str()), (Some(API), format!("Fetching plan from {API} ...").as_str()));
+
+    // A wrong key: a code with the two addresses; the English text is unchanged.
+    let other = key("another owner");
+    let world = self::world();
+    world.serve(grant_plan(&world.owner, dai_power(), 7 * 86400, 256));
+    let error = flow::prepare_sign(TOKEN, API, RPC, &constants(), Some(&other), &world.fake.transport(), &quiet).unwrap_err();
+    assert_eq!(error.msg().code, "flow.wrongKey");
+    assert_eq!(error.msg().param("key"), Some(other.address().to_checksum().as_str()));
+    assert_eq!(error.msg().param("owner"), Some(world.owner.to_checksum().as_str()));
+    assert!(error.message().starts_with("Wrong key: it controls"), "{error}");
+
+    // A plain plan error keeps its kind as the code (the app shows a translated
+    // headline and this English text as the detail).
+    let error = flow::prepare_sign("short", API, RPC, &constants(), None, &world.fake.transport(), &quiet).unwrap_err();
+    assert_eq!((error.kind(), error.msg().code), (ErrorKind::Flow, "plan.badToken"));
+}
+
+#[test]
+fn website_errors_keep_their_code_and_both_texts() {
+    let world = world();
+    world.serve(grant_plan(&world.owner, dai_power(), 7 * 86400, 256));
+    let body = json!({
+        "error": "每日上限必須介於 10 與 40 之間。",
+        "errorEn": "Rule 1 (DAI): the per-day cap must be between 10 and 40.",
+        "code": "bounds.perDay",
+        "params": {"rule": 1, "unit": "DAI", "min": "10", "max": "40", "factor": 4},
+    });
+    world.fake.state.lock().unwrap().customize = Some(Box::new(move |_, _| (400, body.clone())));
+    let session = world.prepare().unwrap();
+    let request = custom::with_changes(session.grant().unwrap(), None, None, &[(0, Some("10".into()), Some("99".into()))]).unwrap();
+    let error = flow::customize(&session, &request, &quiet).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::CustomizeRefused);
+    // The command line prints the English text, the app translates the website's code.
+    assert_eq!(error.message(), "Rule 1 (DAI): the per-day cap must be between 10 and 40.");
+    let msg = serde_json::to_value(error.msg()).unwrap();
+    assert_eq!(msg["code"], "website");
+    assert_eq!(msg["site"]["code"], "bounds.perDay");
+    assert_eq!(msg["site"]["status"], 400);
+    assert_eq!(msg["site"]["params"]["max"], "40");
+    assert_eq!(msg["site"]["zh"], "每日上限必須介於 10 與 40 之間。");
+    assert_eq!(msg["site"]["en"], "Rule 1 (DAI): the per-day cap must be between 10 and 40.");
+
+    // A plan that is gone: the signer's own message wraps the website's answer.
+    world.fake.state.lock().unwrap().customize = Some(Box::new(|_, _| (410, json!({"error": "此簽署計畫已過期（15 分鐘）", "code": "plan.expired"}))));
+    let error = flow::customize(&session, &request, &quiet).unwrap_err();
+    let msg = serde_json::to_value(error.msg()).unwrap();
+    assert_eq!(msg["code"], "flow.editGone");
+    assert_eq!(msg["params"]["error"]["code"], "website");
+    assert_eq!(msg["params"]["error"]["site"]["code"], "plan.expired");
+    assert!(error.message().starts_with("This plan can no longer be edited (此簽署計畫已過期"), "{error}");
+}
+
+#[test]
+fn structured_summary_names_every_contract() {
+    let world = world();
+    world.serve(grant_plan(&world.owner, dai_power(), 7 * 86400, 256));
+    let session = world.prepare().unwrap();
+    let grant = session.summary.grant.as_ref().unwrap();
+    assert_eq!(grant.remaining_calls, 256);
+    let approve = &grant.rules[0];
+    assert_eq!((approve.method.as_str(), approve.target_name.as_str(), approve.spender_name.as_str()), ("approve", "DAI", "PowerLedger"));
+    let json = serde_json::to_value(&session.summary).unwrap();
+    assert_eq!(json["grant"]["rules"][0]["spenderName"], "PowerLedger");
+    assert_eq!(json["kind"], "grant");
 }

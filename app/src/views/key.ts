@@ -1,10 +1,10 @@
 // The key box: keystore file / private key / mnemonic + account index. Secret
 // fields are password inputs that are read once at use and cleared at once.
-import { api, type CommandError } from "../api";
+import { api, errorMsg, plainMsg, type CommandError } from "../api";
 import { changed, forgetKey, store, useSecrets, type KeyKind } from "../app";
 import { confirmDialog, field, h } from "../dom";
 import { pickKeystore, saveKeystore } from "../files";
-import { t } from "../i18n";
+import { onLanguage, t } from "../i18n";
 import { show } from "./common";
 
 export class KeyView {
@@ -85,7 +85,8 @@ export class KeyView {
       store.keyForm.fileName = picked.name;
       this.update();
     } catch (error) {
-      store.status = { key: "status.error", params: { message: String((error as Error)?.message ?? error) }, tone: "error" };
+      // The dialog plugin's own text (English) is the detail.
+      store.status = { key: "key.pickFailed", params: { message: plainMsg("io", String((error as Error)?.message ?? error)) }, tone: "error" };
       changed();
     }
   }
@@ -97,38 +98,41 @@ export class KeyView {
     const first = h("input", { type: "password", autocomplete: "new-password", "data-testid": "save-password" });
     const second = h("input", { type: "password", autocomplete: "new-password", "data-testid": "save-password2" });
     const problem = h("p", { class: "error-text" });
-    const dialog = h("dialog", { class: "modal" });
+    const dialog = h("dialog", { class: "modal", "data-testid": "save-dialog" });
+    // Texts are rendered again when the language changes while the dialog is open.
+    let problemKey: "key.passwordShort" | "key.passwordMismatch" | null = null;
+    const heading = h("h3", {});
+    const firstField = field("", first);
+    const secondField = field("", second);
+    const cancel = h("button", { type: "button", class: "secondary", "data-testid": "save-cancel" });
+    const save = h("button", { type: "button", "data-testid": "save-confirm" });
+    const render = () => {
+      heading.textContent = t("key.save");
+      (firstField.firstChild as HTMLElement).textContent = t("key.newPassword");
+      (secondField.firstChild as HTMLElement).textContent = t("key.repeatPassword");
+      problem.textContent = problemKey ? t(problemKey) : "";
+      cancel.textContent = t("common.cancel");
+      save.textContent = t("common.save");
+    };
+    const stop = onLanguage(render);
     const result = await new Promise<string | null>((resolve) => {
       const done = (value: string | null) => {
-        dialog.close();
+        stop();
+        dialog.close?.();
         dialog.remove();
         resolve(value);
       };
-      dialog.append(
-        h("h3", {}, t("key.save")),
-        field(t("key.newPassword"), first),
-        field(t("key.repeatPassword"), second),
-        problem,
-        h(
-          "div",
-          { class: "row end" },
-          h("button", { type: "button", class: "secondary", onclick: () => done(null) }, t("common.cancel")),
-          h(
-            "button",
-            {
-              type: "button",
-              onclick: () => {
-                if (first.value.length < 8) problem.textContent = t("key.passwordShort");
-                else if (first.value !== second.value) problem.textContent = t("key.passwordMismatch");
-                else done(first.value);
-              },
-            },
-            t("common.save"),
-          ),
-        ),
-      );
+      cancel.onclick = () => done(null);
+      save.onclick = () => {
+        problemKey = first.value.length < 8 ? "key.passwordShort" : first.value !== second.value ? "key.passwordMismatch" : null;
+        render();
+        if (!problemKey) done(first.value);
+      };
+      render();
+      dialog.append(heading, firstField, secondField, problem, h("div", { class: "row end" }, cancel, save));
       document.body.appendChild(dialog);
-      dialog.showModal?.();
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
     });
     first.value = "";
     second.value = "";
@@ -139,14 +143,14 @@ export class KeyView {
       if (path) store.status = { key: "key.saved", params: { path }, tone: "ok" };
     } catch (error) {
       const failure = error as CommandError;
-      store.status = { key: "status.error", params: { message: failure.message ?? String(error) }, tone: "error" };
+      store.status = { key: "status.error", params: { message: errorMsg(failure?.message ? failure : { kind: "error", message: String(error) }) }, tone: "error" };
     }
     changed();
   }
 
   /** Ask before wiping (used by the This computer page). */
   static async confirmForget(): Promise<void> {
-    if (await confirmDialog(t("key.forget") + "?", t("common.yes"), t("common.no"))) await forgetKey();
+    if (await confirmDialog(() => t("key.forgetConfirm"), () => t("common.yes"), () => t("common.no"))) await forgetKey();
   }
 
   update(): void {
@@ -157,6 +161,7 @@ export class KeyView {
     for (const [kind, input] of this.sources) input.checked = kind === source;
     this.fileButton.textContent = t("key.chooseFile");
     this.fileName.textContent = store.keyForm.fileName || t("key.noFile");
+    this.fileName.toggleAttribute("data-raw", !!store.keyForm.fileName);
     (this.passwordLabel.firstChild as HTMLElement).textContent = t("key.password");
     (this.privateLabel.firstChild as HTMLElement).textContent = t("key.privateKey");
     (this.mnemonicLabel.firstChild as HTMLElement).textContent = t("key.mnemonic");

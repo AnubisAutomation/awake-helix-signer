@@ -362,7 +362,7 @@ fn confirm_or_edit(mut session: Session, console: &Console) -> Result<Option<Ses
         if answer.to_uppercase() != EDIT_WORD {
             return Ok(None);
         }
-        match edit_request(&session, console).and_then(|request| flow::customize(&session, &request, &|line| console.out(line))) {
+        match edit_request(&session, console).and_then(|request| flow::customize(&session, &request, &|line: &helix_signer_core::Message| console.out(&line.text))) {
             Ok(next) => session = next,
             Err(error) if matches!(error.kind(), ErrorKind::CustomizeRefused | ErrorKind::Plan) => {
                 console.out(&format!("Not changed: {error}"))
@@ -395,7 +395,7 @@ fn flag_changes(args: &SignArgs, session: &Session) -> Result<Option<CustomizeRe
 fn run_sign(args: SignArgs, console: &Console, transport: &Transport) -> Result<u8> {
     let constants = flow::load_constants(args.key.dev_constants.as_deref(), &args.key.rpc)?;
     let mut material = load(args.key, console)?;
-    let log = |line: &str| console.out(line);
+    let log = |line: &helix_signer_core::Message| console.out(&line.text);
     let result = (|| -> Result<Option<flow::Outcome>> {
         let mut session = flow::prepare_sign(args.plan, args.api, &args.key.rpc, &constants, Some(&material), transport, &log)?;
         if let Some(request) = flag_changes(&args, &session)? {
@@ -434,7 +434,7 @@ fn run_revoke(args: RevokeArgs, console: &Console, transport: &Transport) -> Res
     }
     let constants = flow::load_constants(args.key.dev_constants.as_deref(), &args.key.rpc)?;
     let mut material = load(args.key, console)?;
-    let log = |line: &str| console.out(line);
+    let log = |line: &helix_signer_core::Message| console.out(&line.text);
     let source = match args.plan {
         Some(token) => RevokeSource::Plan { token: token.to_string(), api: args.api.to_string() },
         None => RevokeSource::Offline {
@@ -499,7 +499,7 @@ fn run_grants(list: bool, grant: Option<&str>, all: bool, api: &str, key: &KeyOp
         console.out(&format!("Website: {api}   <-- NOT the official site; continue only if you trust it"));
     }
     let mut material = load(key, console)?;
-    let log = |line: &str| console.out(line);
+    let log = |line: &helix_signer_core::Message| console.out(&line.text);
     let result = (|| -> Result<u8> {
         site.login(&material, &log)?;
         if list {

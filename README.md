@@ -67,14 +67,14 @@ shasum -a 256 -c SHA256SUMS --ignore-missing      # macOS
 
 ```powershell
 # Windows: the printed hash must equal the file's line in SHA256SUMS
-Get-FileHash .\awake-helix-signer-0.5.1-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\awake-helix-signer-0.5.2-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 Check that the file was built by this repository's release workflow
 ([GitHub artifact attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)):
 
 ```sh
-gh attestation verify awake-helix-signer-0.5.1-windows-x64-setup.exe --repo AnubisAutomation/awake-helix-signer
+gh attestation verify awake-helix-signer-0.5.2-windows-x64-setup.exe --repo AnubisAutomation/awake-helix-signer
 ```
 
 The Windows installer is not code-signed and the macOS app is ad-hoc signed

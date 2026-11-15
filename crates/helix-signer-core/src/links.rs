@@ -11,7 +11,7 @@
 use serde::Serialize;
 
 use crate::constants::DEFAULT_API;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::net::{is_loopback, origin, parse_qs, urlsplit, validate_url};
 use crate::plan::{check_token, is_token};
 use crate::pyfmt::str_repr;
@@ -60,7 +60,7 @@ pub struct Link {
 pub fn parse_link(url: &str, allowed_apis: &[String], development: bool) -> Result<Link> {
     let parts = urlsplit(url.trim())?;
     if parts.scheme.to_lowercase() != SCHEME {
-        return Err(Error::plan("Not an awakehelix:// link."));
+        return Err(Error::coded(ErrorKind::Plan, crate::msg!("link.notOurs", "Not an awakehelix:// link.")));
     }
     let name = if parts.netloc.is_empty() { parts.path.trim_matches('/').to_string() } else { parts.netloc.clone() }.to_lowercase();
     let action = match name.as_str() {
@@ -68,7 +68,7 @@ pub fn parse_link(url: &str, allowed_apis: &[String], development: bool) -> Resu
         "revoke" => LinkAction::Revoke,
         "ping" => LinkAction::Ping,
         "grants" => LinkAction::Grants,
-        _ => return Err(Error::plan(format!("Unknown link action {}.", str_repr(&name)))),
+        _ => return Err(Error::coded(ErrorKind::Plan, crate::msg!("link.unknownAction", "Unknown link action {action}.", action = str_repr(&name)))),
     };
     let query = parse_qs(&parts.query);
     let first = |key: &str| query.iter().find(|(name, _)| name == key).and_then(|(_, values)| values.first().cloned());
@@ -76,7 +76,7 @@ pub fn parse_link(url: &str, allowed_apis: &[String], development: bool) -> Resu
         LinkAction::Ping => {
             let token = first("token").unwrap_or_default();
             if !is_token(&token) {
-                return Err(Error::plan("The install-check token is malformed; click the verify button on the website again."));
+                return Err(Error::coded(ErrorKind::Plan, crate::msg!("link.badCheckToken", "The install-check token is malformed; click the verify button on the website again.")));
             }
             token
         }
@@ -92,9 +92,15 @@ pub fn parse_link(url: &str, allowed_apis: &[String], development: bool) -> Resu
     trusted.extend(allowed_apis.iter().map(|item| origin(item)));
     let site = origin(&api);
     if !trusted.contains(&site) && !(development && is_loopback(&api)) {
-        return Err(Error::plan(format!(
-            "This link points to {site}, which is not the official Awake Helix website ({DEFAULT_API}). It was refused. If you really run your own instance, pass --allow-api {site}."
-        )));
+        return Err(Error::coded(
+            ErrorKind::Plan,
+            crate::msg!(
+                "link.foreignSite",
+                "This link points to {site}, which is not the official Awake Helix website ({official}). It was refused. If you really run your own instance, pass --allow-api {site}.",
+                site = &site,
+                official = DEFAULT_API
+            ),
+        ));
     }
     Ok(Link { action, token, api })
 }

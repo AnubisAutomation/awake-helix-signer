@@ -25,8 +25,8 @@ use crate::views::{LogEvent, ProgressEvent};
 struct WindowEvents(tauri::AppHandle);
 
 impl Events for WindowEvents {
-    fn log(&self, scope: &'static str, line: &str) {
-        let _ = self.0.emit("signer://log", LogEvent { scope, line: line.to_string() });
+    fn log(&self, scope: &'static str, line: &helix_signer_core::Message) {
+        let _ = self.0.emit("signer://log", LogEvent { scope, line: line.text.clone(), msg: line.clone() });
     }
     fn progress(&self, done: usize, total: usize) {
         let _ = self.0.emit("signer://progress", ProgressEvent { done, total });
@@ -172,6 +172,7 @@ fn run_with(options: Options) {
             commands::ping,
             commands::touch,
             commands::selftest_done,
+            commands::set_title,
             commands::quit,
         ])
         .build(tauri::generate_context!())

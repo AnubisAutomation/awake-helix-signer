@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use crate::abi::{decode_install, encode_install, RawRule};
 use crate::address::{hex0x, keccak, same, Address};
 use crate::constants::{self as c, Constants, GrantKind};
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::pyfmt::{py_repr, py_str, shifted_plain};
 
 /// One decoded Helix7702Account policy rule.
@@ -586,6 +586,6 @@ pub fn check_token(token: &str) -> Result<()> {
     if is_token(token) {
         Ok(())
     } else {
-        Err(Error::plan("The plan token is malformed; copy the whole command again."))
+        Err(Error::coded(ErrorKind::Plan, crate::msg!("plan.badToken", "The plan token is malformed; copy the whole command again.")))
     }
 }

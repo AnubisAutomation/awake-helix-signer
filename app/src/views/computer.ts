@@ -55,6 +55,7 @@ export class ComputerView {
     this.version.textContent = info ? t("computer.version", { version: info.version, os: info.os, arch: info.arch }) : "";
     this.keyTitle.textContent = t("computer.keyTitle");
     this.keyText.textContent = store.key ? store.key.address : t("computer.noKey");
+    this.keyText.toggleAttribute("data-raw", !!store.key);
     this.forgetButton.textContent = t("key.forget");
     show(this.forgetButton, !!store.key);
     this.checkTitle.textContent = t("computer.checkTitle");

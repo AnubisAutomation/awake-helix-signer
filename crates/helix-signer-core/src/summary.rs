@@ -107,6 +107,8 @@ pub struct RuleSummary {
     pub target_name: String,
     /// The only spender of an approval.
     pub spender: Option<Address>,
+    /// Its pinned name, or "".
+    pub spender_name: String,
     /// Swap details.
     pub swap: Option<SwapSummary>,
     /// Unit of the caps (DAI, LGNS, aiLGNS, lock IDs).
@@ -144,6 +146,7 @@ impl RuleSummary {
             target: rule.target,
             target_name: c::contract_name(&rule.target.to_checksum()).to_string(),
             spender: (rule.kind == 0).then_some(rule.counterparty),
+            spender_name: if rule.kind == 0 { c::contract_name(&rule.counterparty.to_checksum()).to_string() } else { String::new() },
             swap,
             unit: unit.to_string(),
             decimals,
@@ -235,6 +238,8 @@ pub struct RevokeSummary {
     pub redelegates: bool,
     /// The pinned implementation it is delegated to.
     pub delegate: Address,
+    /// Its pinned name, or "".
+    pub delegate_name: String,
 }
 
 /// Everything the owner confirms.
@@ -421,6 +426,7 @@ pub fn revoke_summary(plan: &RevokePlan, state: &AccountState, api: Option<&str>
         delegation: state.target.clone(),
         redelegates,
         delegate: constants.implementation,
+        delegate_name: c::contract_name(&constants.implementation.to_checksum()).to_string(),
     });
     summary
 }

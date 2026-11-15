@@ -1,6 +1,7 @@
 //! What the backend sends to the page (camelCase JSON; mirrored in src/api.ts)
 //! and the one error shape every command returns.
 
+use helix_signer_core::{msg, Message, Summary};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,21 +11,31 @@ pub struct CommandError {
     /// `refused`, `error`, `customize` (edit out of bounds, the plan stays),
     /// `busy`, `cancelled` or `nokey`.
     pub kind: &'static str,
+    /// English text (logs, tests).
     pub message: String,
+    /// The same with its code and params: what the page translates.
+    pub msg: Message,
 }
 
 impl CommandError {
-    pub fn refused(message: impl Into<String>) -> Self {
-        Self { kind: "refused", message: message.into() }
+    pub fn new(kind: &'static str, msg: Message) -> Self {
+        Self { kind, message: msg.text.clone(), msg }
     }
-    pub fn error(message: impl Into<String>) -> Self {
-        Self { kind: "error", message: message.into() }
+    pub fn refused(msg: Message) -> Self {
+        Self::new("refused", msg)
+    }
+    pub fn error(msg: Message) -> Self {
+        Self::new("error", msg)
+    }
+    /// A local failure without a code of its own (an OS error text).
+    pub fn io(text: impl Into<String>) -> Self {
+        Self::error(Message::plain("io", text))
     }
     pub fn busy() -> Self {
-        Self { kind: "busy", message: "Wait for the current request to finish.".into() }
+        Self::new("busy", msg!("app.busy", "Wait for the current request to finish."))
     }
     pub fn no_key() -> Self {
-        Self { kind: "nokey", message: "Unlock your key first.".into() }
+        Self::new("nokey", msg!("app.noKey", "Unlock your key first."))
     }
 }
 
@@ -124,7 +135,10 @@ pub struct SessionView {
     /// `grant` or `revoke`.
     pub kind: String,
     pub confirm_word: String,
+    /// The summary as the command line prints it (English).
     pub summary: String,
+    /// The same summary as data: the page renders it in its language.
+    pub summary_data: Summary,
     pub editor: Option<EditorPlan>,
 }
 
@@ -146,6 +160,10 @@ pub struct GrantRowView {
     pub key: String,
     pub key_origin: String,
     pub bot: String,
+    /// `none`, `unknown`, `deleted`, `running` or `stopped`.
+    pub bot_state: String,
+    pub bot_script: String,
+    pub bot_id: String,
     pub valid_until: Option<i64>,
     pub remaining_calls: Option<i64>,
     pub revocable: bool,
@@ -169,6 +187,7 @@ pub struct ListingView {
 pub struct PendingView {
     pub count: usize,
     pub summaries: Vec<String>,
+    pub summary_data: Vec<Summary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -178,7 +197,7 @@ pub struct RevokeOutcome {
     pub total: usize,
     pub cancelled: bool,
     pub listing: ListingView,
-    pub lines: Vec<String>,
+    pub lines: Vec<Message>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -206,7 +225,10 @@ pub struct PingView {
 #[derive(Debug, Clone, Serialize)]
 pub struct LogEvent {
     pub scope: &'static str,
+    /// English text.
     pub line: String,
+    /// The line with its code and params.
+    pub msg: Message,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -126,6 +126,17 @@ async function shot(name) {
   writeFileSync(join(out, `${name}.png`), Buffer.from(png, "base64"));
 }
 const status = () => text("status");
+// Switch the page's language as the user does (the select in the header).
+const setLanguage = (language) =>
+  script(`const select = document.querySelector('[data-testid=language]'); select.value = arguments[0]; select.dispatchEvent(new Event('change'));`, [language]);
+// What a few screens must say in the languages the screenshots are taken in.
+const LOCALIZED = {
+  "zh-Hant": { calls: "可執行次數", summary: "可執行次數：總共最多 256 次 Bot 操作", refused: "可執行次數必須介於", grants: "我的授權", computer: "這台電腦" },
+  ja: { calls: "実行可能回数", summary: "実行可能回数：Bot の操作は合計 256 回まで", refused: "実行可能回数は", grants: "マイ権限", computer: "このコンピューター" },
+  es: { calls: "Operaciones permitidas", summary: "Operaciones permitidas: como máximo 256 operaciones del bot en total", refused: "Las operaciones permitidas deben estar entre", grants: "Mis permisos", computer: "Este equipo" },
+};
+const SHOT_LANGUAGES = Object.keys(LOCALIZED);
+
 function assert(condition, message) {
   if (!condition) throw new Error(`assertion failed: ${message}`);
   console.log(`  ok - ${message}`);
@@ -148,6 +159,24 @@ try {
   assert((await script("return document.querySelector('[data-testid=key-private]').value")) === "", "the private key field was cleared");
   assert((await text("key-address")).includes(fake.owner), "the key box shows the loaded address");
   await shot("1-verified");
+
+  // The same verified request in other languages: the summary is rendered from
+  // the verified data, the editor and a website refusal follow the switch.
+  await type("edit-calls", "99999");
+  await click("edit-apply");
+  await waitFor("the website's refusal", async () => (await text("edit-error")).includes("between"));
+  for (const language of SHOT_LANGUAGES) {
+    await setLanguage(language);
+    const words = LOCALIZED[language];
+    await waitFor(`the ${language} summary`, async () => (await text("summary")).includes(words.summary));
+    assert((await text("editor")).includes(words.calls), `${language}: the editor names "${words.calls}"`);
+    assert((await text("edit-error")).includes(words.refused), `${language}: the website's refusal is translated by its code`);
+    assert(!(await text("summary")).includes("bot operations"), `${language}: no English left in the summary`);
+    await shot(`i18n-${language}-request`);
+  }
+  await setLanguage("en");
+  await click("edit-defaults");
+  await waitFor("the default plan again", async () => (await text("summary")).includes("at most 256 bot operations"));
 
   await type("edit-calls", "200");
   await type("edit-call-0", "15");
@@ -185,6 +214,13 @@ try {
   const rows = await script("return [...document.querySelectorAll('[data-testid=grant-row]')].map((row) => row.dataset.grant + ' ' + row.className)");
   assert(rows.length === 4, `four grants listed (${rows.map((row) => row.split(" ").pop()).join(", ")})`);
   await shot("4-grants");
+  for (const language of SHOT_LANGUAGES) {
+    await setLanguage(language);
+    await waitFor(`the ${language} grants page`, async () => (await text("tab-grants")) === LOCALIZED[language].grants);
+    assert((await text("grants-table")).includes(LOCALIZED[language].calls), `${language}: the grants list names "${LOCALIZED[language].calls}"`);
+    await shot(`i18n-${language}-grants`);
+  }
+  await setLanguage("en");
   await click(`grant-select-${fake.grants[0]}`);
   await click("grants-revoke-selected");
   await waitFor("the verified revocation", async () => (await status()).includes("Type REVOKE"));
@@ -208,6 +244,14 @@ try {
   assert(left.includes(fake.grants[2]) && left.length === 2, "left on chain: the expired grant and the one authorized in part 1");
 
   // ------------------------------------------------------- 3. languages, theme
+  await click("tab-computer");
+  for (const language of SHOT_LANGUAGES) {
+    await setLanguage(language);
+    await waitFor(`the ${language} computer page`, async () => (await text("tab-computer")) === LOCALIZED[language].computer);
+    await shot(`i18n-${language}-computer`);
+  }
+  await setLanguage("en");
+  await click("tab-grants");
   await script("document.querySelector('[data-testid=language]').value = 'zh-Hant'; document.querySelector('[data-testid=language]').dispatchEvent(new Event('change'))");
   assert((await text("tab-grants")) === "我的授權", "language switch (zh-Hant)");
   await script("document.querySelector('[data-testid=theme]').value = 'dark'; document.querySelector('[data-testid=theme]').dispatchEvent(new Event('change'))");

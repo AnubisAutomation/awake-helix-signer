@@ -71,25 +71,25 @@ pub fn ping_url(api: &str, token: &str) -> String {
 /// Confirm one install check.
 pub fn send_ping(api: &str, token: &str, client: &dyn HttpClient) -> Result<PingResult> {
     if !is_token(token) {
-        return Err(Error::ping("The check token is malformed; click \u{201c}I have installed it, verify\u{201d} on the website again."));
+        return Err(Error::coded(ErrorKind::Ping, crate::msg!("ping.malformed", "The check token is malformed; click \u{201c}I have installed it, verify\u{201d} on the website again.")));
     }
     let api = validate_url(api, "Website API").map_err(|error| error.into_kind(ErrorKind::Ping))?;
     let body = json!({"version": crate::VERSION, "os": system_name(), "arch": cpu_name()});
     let answer = match http_json(client, &ping_url(&api, token), "POST", Some(&body), Duration::from_secs(20)) {
         Ok(answer) => answer,
         Err(error) if error.kind() == ErrorKind::HttpStatus => {
-            return Err(Error::ping(match error.status() {
-                Some(404) => "The website does not know this check. Click the verify button on the website again.".to_string(),
-                Some(409) => "This check was already confirmed; return to the browser.".to_string(),
-                Some(410) => "This check expired (10 minutes). Click the verify button on the website again.".to_string(),
-                Some(429) => "Too many requests; wait a minute and try again.".to_string(),
-                _ => format!("The website refused the check: {error}"),
+            return Err(Error::coded(ErrorKind::Ping, match error.status() {
+                Some(404) => crate::msg!("ping.unknown", "The website does not know this check. Click the verify button on the website again."),
+                Some(409) => crate::msg!("ping.used", "This check was already confirmed; return to the browser."),
+                Some(410) => crate::msg!("ping.expired", "This check expired (10 minutes). Click the verify button on the website again."),
+                Some(429) => crate::msg!("flow.tooManyRequests", "Too many requests; wait a minute and try again."),
+                _ => crate::msg!("ping.refused", "The website refused the check: {error}", error = &error),
             }))
         }
         Err(error) => return Err(error.into_kind(ErrorKind::Ping)),
     };
     if answer.get("status").and_then(|value| value.as_str()) != Some("confirmed") {
-        return Err(Error::ping("The website did not confirm the check; try again from the website."));
+        return Err(Error::coded(ErrorKind::Ping, crate::msg!("ping.notConfirmed", "The website did not confirm the check; try again from the website.")));
     }
     Ok(PingResult { version: crate::VERSION.into(), os: system_name().into(), arch: cpu_name().into(), api })
 }

@@ -71,10 +71,10 @@ pub fn refusal(error: &helix_signer_core::Error) -> CommandError {
         ErrorKind::Io => "error",
         _ => "refused",
     };
-    CommandError { kind, message: error.to_string() }
+    CommandError::new(kind, error.msg().clone())
 }
 
-pub type Log<'a> = &'a (dyn Fn(&str) + Sync);
+pub type Log<'a> = &'a (dyn Fn(&helix_signer_core::Message) + Sync);
 
 /// Everything the controller needs from the core library.
 pub trait Core: Send + Sync + 'static {
@@ -221,6 +221,9 @@ fn listing_view(listing: &core::Listing) -> ListingView {
                 key: row.key.clone(),
                 key_origin: row.key_origin.clone(),
                 bot: row.bot.clone(),
+                bot_state: row.bot_state.clone(),
+                bot_script: row.bot_script.clone(),
+                bot_id: row.bot_id.clone(),
                 valid_until: row.valid_until,
                 remaining_calls: row.remaining_calls,
                 revocable: row.revocable,
@@ -272,7 +275,7 @@ impl Core for RealCore {
         let result = match input {
             KeyInput::Keystore { path: Some(path), password, .. } => core::KeyMaterial::from_keystore(&path, &password.0),
             KeyInput::Keystore { json: Some(json), password, .. } => core::KeyMaterial::from_keystore_json(&json, "keystore", &password.0),
-            KeyInput::Keystore { .. } => return Err(CommandError::refused("Choose the keystore file.")),
+            KeyInput::Keystore { .. } => return Err(CommandError::refused(core::msg!("app.chooseKeystore", "Choose the keystore file."))),
             KeyInput::PrivateKey { secret } => core::KeyMaterial::from_private_key(&secret.0),
             KeyInput::Mnemonic { phrase, index } => core::KeyMaterial::from_mnemonic(&phrase.0, i64::from(index), ""),
         };
@@ -309,7 +312,8 @@ impl Core for RealCore {
 
     fn customize(&self, session: &Self::Session, request: &Value, log: Log) -> Result<Self::Session, CommandError> {
         let request: core::CustomizeRequest =
-            serde_json::from_value(request.clone()).map_err(|error| CommandError::refused(format!("Malformed edit: {error}")))?;
+            serde_json::from_value(request.clone())
+                .map_err(|error| CommandError::refused(core::msg!("app.malformedEdit", "Malformed edit: {detail}", detail = error.to_string())))?;
         core::customize(session, &request, log).map_err(|error| refusal(&error))
     }
 
@@ -318,6 +322,7 @@ impl Core for RealCore {
             kind: if session.grant().is_some() { "grant" } else { "revoke" }.to_string(),
             confirm_word: session.confirm_word().to_string(),
             summary: session.summary.text(),
+            summary_data: session.summary.clone(),
             editor: session.grant().map(editor_of),
         }
     }

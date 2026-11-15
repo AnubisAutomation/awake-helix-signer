@@ -27,9 +27,9 @@ import signer_constants as c
 from signer_constants import amount
 
 
-def _gone(url: str, code: int, error: str, **extra: Any) -> HTTPError:
-    """An HTTP error with a JSON body."""
-    return HTTPError(url, code, "error", Message(), io.BytesIO(json.dumps({"error": error, **extra}).encode()))
+def _gone(url: str, http_status: int, error: str, /, **extra: Any) -> HTTPError:
+    """An HTTP error with a JSON body (``extra``: errorEn, code, params, status, ...)."""
+    return HTTPError(url, http_status, "error", Message(), io.BytesIO(json.dumps({"error": error, **extra}).encode()))
 
 
 class _Response(io.BytesIO):
@@ -247,11 +247,18 @@ class Website:
         until = int(options.get("validUntil") or default_until)
         minimum, maximum = now + 3600, now + 90 * 86400
         if not minimum <= until <= maximum:
-            raise _gone(url, 400, "到期時間超出範圍。", errorEn=f"The expiry must be between {minimum} and {maximum}.")
+            raise _gone(
+                url, 400, "到期時間超出範圍。", errorEn=f"The expiry must be between {minimum} and {maximum}.",
+                code="bounds.expiry", params={"min": minimum, "next": minimum - 3600, "max": maximum, "days": 90},
+            )
         calls = int(options.get("remainingCalls") or default_calls)
         most = max(default_calls, len(rules) * 4 * ((max(until, default_until) - now) // 86400 + 2))
         if not len(rules) <= calls <= min(4096, most):
-            raise _gone(url, 400, "呼叫次數超出範圍。", errorEn=f"The call count must be between {len(rules)} and {min(4096, most)}.")
+            raise _gone(
+                url, 400, "呼叫次數超出範圍。", errorEn=f"The call count must be between {len(rules)} and {min(4096, most)}.",
+                code="bounds.calls",
+                params={"min": len(rules), "max": min(4096, most), "perRuleDay": 4, "days": (max(until, default_until) - now) // 86400 + 2, "cap": 4096},
+            )
         decimals = [18] * len(rules)
         for change in options.get("rules") or []:
             index = change["index"]
@@ -259,9 +266,17 @@ class Website:
             per_call = int(float(change.get("maxPerCall", need_call / 10**18)) * 10**18)
             per_day = int(float(change.get("maxPerDay", max(need_day, per_call) / 10**18)) * 10**18)
             if not need_call <= per_call <= need_call * 2:
-                raise _gone(url, 400, "每次上限超出範圍。", errorEn=f"Rule {index + 1}: the per-call cap is out of range.")
+                raise _gone(
+                    url, 400, "每次上限超出範圍。", errorEn=f"Rule {index + 1}: the per-call cap is out of range.",
+                    code="bounds.perCall",
+                    params={"rule": index + 1, "unit": "DAI", "min": amount(need_call, 18), "max": amount(need_call * 2, 18), "factor": 2},
+                )
             if not max(need_day, per_call) <= per_day <= need_day * 4:
-                raise _gone(url, 400, "每日上限超出範圍。", errorEn=f"Rule {index + 1}: the per-day cap is out of range.")
+                raise _gone(
+                    url, 400, "每日上限超出範圍。", errorEn=f"Rule {index + 1}: the per-day cap is out of range.",
+                    code="bounds.perDay",
+                    params={"rule": index + 1, "unit": "DAI", "min": amount(max(need_day, per_call), 18), "max": amount(need_day * 4, 18), "factor": 4},
+                )
             rules[index][4], rules[index][6] = per_call, per_day
         encoded = c.INSTALL_SELECTOR + encode(
             list(c.INSTALL_TYPES), [grant_id, (key, bot, after, until, calls), [tuple(item) for item in rules]]

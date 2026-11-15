@@ -3,8 +3,16 @@
 // CLI). These checks only catch typing mistakes early; the backend and
 // the core verify the website's re-planned grant against exactly this
 // request before anything can be signed.
+import type { Msg } from "./api";
+import { DICTIONARIES, LANGUAGES } from "./i18n";
 
 export const LOCAL = "Local";
+
+/** "Local" in any of the languages (the zone field shows it in the selected one). */
+export function isLocalZone(name: string): boolean {
+  const text = name.trim().toLowerCase();
+  return !text || text === LOCAL.toLowerCase() || LANGUAGES.some((language) => DICTIONARIES[language]["editor.zoneLocal"].toLowerCase() === text);
+}
 export const UTC = "UTC";
 export const ZONES = [
   LOCAL, UTC, "Asia/Taipei", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Singapore", "Asia/Tokyo",
@@ -16,7 +24,7 @@ export const ZONES = [
 export class EditError extends Error {
   constructor(
     public readonly key: string,
-    public readonly params: Record<string, string | number> = {},
+    public readonly params: Record<string, string | number | Msg> = {},
   ) {
     super(key);
   }
@@ -75,7 +83,7 @@ type Zone = { kind: "local" } | { kind: "fixed"; minutes: number } | { kind: "ia
 /** Resolve a time zone: Local, UTC, an IANA name or an offset like +08:00. */
 export function zoneOf(name: string): Zone {
   const text = name.trim();
-  if (!text || text.toLowerCase() === LOCAL.toLowerCase()) return { kind: "local" };
+  if (isLocalZone(text)) return { kind: "local" };
   if (["UTC", "Z", "GMT"].includes(text.toUpperCase())) return { kind: "fixed", minutes: 0 };
   const offset = OFFSET.exec(text);
   if (offset) {
@@ -193,7 +201,7 @@ export function parseCalls(text: string): number {
 }
 
 /** A positive decimal amount in exact base units. */
-export function baseUnits(text: string, decimals: number, label: string): bigint {
+export function baseUnits(text: string, decimals: number, label: string | Msg): bigint {
   const value = text.trim();
   const match = /^\+?(\d*)(?:\.(\d*))?$/.exec(value);
   if (!match || (!match[1] && !match[2])) throw new EditError("edit.badAmount", { label, value });
@@ -226,13 +234,18 @@ export function requestOf(plan: EditorPlan): CustomizeRequest {
   };
 }
 
+/** "rule 1, per call" (translated where it is shown). */
+export function capLabel(position: number, which: "perCall" | "perDay"): Msg {
+  const key = `editor.capLabel.${which}`;
+  return { code: `ui:${key}`, params: { rule: String(position + 1) }, text: `${position + 1}/${which === "perCall" ? "call" : "day"}` };
+}
+
 /** Parse the fields into a complete customize request; throws EditError on a typing mistake. */
 export function buildRequest(plan: EditorPlan, fields: Fields): CustomizeRequest {
   const rules = plan.rules.map((rule, position) => {
     const typed = fields.rules[position] ?? { maxPerCall: "", maxPerDay: "" };
-    const label = String(position + 1);
-    baseUnits(typed.maxPerCall, rule.decimals, `${label}/call`);
-    baseUnits(typed.maxPerDay, rule.decimals, `${label}/day`);
+    baseUnits(typed.maxPerCall, rule.decimals, capLabel(position, "perCall"));
+    baseUnits(typed.maxPerDay, rule.decimals, capLabel(position, "perDay"));
     return { index: rule.index, maxPerCall: typed.maxPerCall.trim(), maxPerDay: typed.maxPerDay.trim() };
   });
   return {

@@ -10,7 +10,33 @@ use helix_signer_app_lib::controller::{Controller, Events, IDLE_WIPE};
 use helix_signer_app_lib::views::{
     CommandError, EditorBounds, EditorPlan, GrantRowView, KeyView, ListingView, PingView, SessionView, SignResult,
 };
+use helix_signer_core::{Address, Message, PlanKind, Summary};
 use serde_json::{json, Value};
+
+fn refused(text: &str) -> CommandError {
+    CommandError::refused(Message::plain("plan", text))
+}
+
+fn line(text: &str) -> Message {
+    Message::plain("log", text)
+}
+
+fn summary(kind: PlanKind) -> Summary {
+    Summary {
+        kind,
+        signer_version: "0.5.2".into(),
+        website: Some(API.into()),
+        official_website: true,
+        chain_id: 6714,
+        rpc_url: "https://rpc.anubispace.org".into(),
+        development: false,
+        owner: Address::constant(OWNER),
+        transaction: String::new(),
+        balance: "1 DAI".into(),
+        grant: None,
+        revoke: None,
+    }
+}
 
 const OWNER: &str = "0x814CEceE4ab7a2c37ED2F2C67bef5B325Ac53bDF";
 const API: &str = "https://anubis.sivilization.com";
@@ -73,6 +99,9 @@ impl Mock {
             key: "0xkey".into(),
             key_origin: "hosted".into(),
             bot: "dai-power #12 (running)".into(),
+            bot_state: "running".into(),
+            bot_script: "dai-power".into(),
+            bot_id: "12".into(),
             valid_until: Some(1),
             remaining_calls: Some(3),
             revocable: !revoked.iter().any(|item| item == id),
@@ -117,7 +146,7 @@ impl Core for MockCore {
     fn parse_link(&self, url: &str) -> Result<LinkInfo, CommandError> {
         let action = url.strip_prefix("awakehelix://").and_then(|rest| rest.split('?').next()).unwrap_or_default();
         if !["sign", "revoke", "ping", "grants"].contains(&action) {
-            return Err(CommandError::refused("Not an awakehelix:// link."));
+            return Err(refused("Not an awakehelix:// link."));
         }
         let api = if url.contains("api=http://127.0.0.1") { "http://127.0.0.1:9".to_string() } else { API.to_string() };
         Ok(LinkInfo { action: action.into(), token: "T".repeat(32), api })
@@ -125,7 +154,7 @@ impl Core for MockCore {
     fn load_key(&self, input: KeyInput) -> Result<Key, CommandError> {
         if let KeyInput::PrivateKey { secret } = &input {
             if secret.0.as_str() != "good" {
-                return Err(CommandError::refused("The private key must be 64 hexadecimal characters."));
+                return Err(refused("The private key must be 64 hexadecimal characters."));
             }
         }
         let wiped = Arc::new(AtomicBool::new(false));
@@ -145,9 +174,9 @@ impl Core for MockCore {
     fn prepare(&self, link: &LinkInfo, key: &Key, log: Log) -> Result<Session, CommandError> {
         assert!(!key.wiped.load(Ordering::SeqCst), "prepare got a wiped key");
         self.0.record(format!("prepare {}", link.action));
-        log("Fetching plan ...");
+        log(&line("Fetching plan ..."));
         if self.0.fail_prepare.load(Ordering::SeqCst) {
-            return Err(CommandError::refused("The plan's delegate is not the pinned Helix7702 implementation."));
+            return Err(refused("The plan's delegate is not the pinned Helix7702 implementation."));
         }
         Ok(Session { kind: if link.action == "sign" { "grant" } else { "revoke" }, calls: 256, grant: "0xg".into() })
     }
@@ -155,10 +184,10 @@ impl Core for MockCore {
         self.0.record(format!("customize {request}"));
         let calls = request.get("remainingCalls").and_then(Value::as_u64).unwrap_or(256);
         if calls > 4096 {
-            return Err(CommandError { kind: "customize", message: "The call count must be between 2 and 4096.".into() });
+            return Err(CommandError::new("customize", Message::plain("customizeRefused", "The call count must be between 2 and 4096.")));
         }
         if calls == 13 {
-            return Err(CommandError::refused("The website's new plan changes owner, which an edit may never change."));
+            return Err(refused("The website's new plan changes owner, which an edit may never change."));
         }
         Ok(Session { calls, ..session.clone() })
     }
@@ -167,6 +196,7 @@ impl Core for MockCore {
             kind: session.kind.into(),
             confirm_word: if session.kind == "grant" { "AUTHORIZE" } else { "REVOKE" }.into(),
             summary: format!("Calls: at most {} bot operations in total", session.calls),
+            summary_data: summary(if session.kind == "grant" { PlanKind::Grant } else { PlanKind::Revoke }),
             editor: (session.kind == "grant").then(|| EditorPlan {
                 valid_until: 1,
                 remaining_calls: session.calls,
@@ -178,7 +208,7 @@ impl Core for MockCore {
     fn execute(&self, session: &Session, mut key: Key, log: Log) -> Result<SignResult, CommandError> {
         assert!(!key.wiped.load(Ordering::SeqCst));
         self.0.record(format!("execute {}", session.calls));
-        log("Broadcasting ...");
+        log(&line("Broadcasting ..."));
         self.wipe(&mut key);
         Ok(SignResult { tx_hash: "0xtx".into(), block: 101, reported: true, report_message: String::new() })
     }
@@ -191,7 +221,7 @@ impl Core for MockCore {
     }
     fn login(&self, site: &Site, _: &Key, log: Log) -> Result<(), CommandError> {
         self.0.record("login");
-        log("Signing in (a signature only; no transaction) ...");
+        log(&line("Signing in (a signature only; no transaction) ..."));
         site.signed_in.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -217,13 +247,13 @@ impl Core for MockCore {
             hook(number);
         }
         if *self.0.fail_revoke_at.lock().unwrap() == Some(number) {
-            return Err(CommandError::refused("The chain refused the transaction."));
+            return Err(refused("The chain refused the transaction."));
         }
         self.0.revoked.lock().unwrap().push(session.grant.clone());
         Ok(RevokeDone { tx_hash: format!("0x{number}"), block: 200 + number as u64, stopped_bots: vec!["7".into()] })
     }
     fn ping(&self, link: &LinkInfo) -> Result<PingView, CommandError> {
-        Ok(PingView { version: "0.5.1".into(), os: "linux".into(), arch: "x86_64".into(), api: link.api.clone() })
+        Ok(PingView { version: "0.5.2".into(), os: "linux".into(), arch: "x86_64".into(), api: link.api.clone() })
     }
 }
 
@@ -234,8 +264,8 @@ struct Recorder {
     wiped: AtomicUsize,
 }
 impl Events for Recorder {
-    fn log(&self, scope: &'static str, line: &str) {
-        self.lines.lock().unwrap().push((scope.into(), line.into()));
+    fn log(&self, scope: &'static str, line: &Message) {
+        self.lines.lock().unwrap().push((scope.into(), line.text.clone()));
     }
     fn progress(&self, done: usize, total: usize) {
         self.progress.lock().unwrap().push((done, total));
@@ -353,7 +383,7 @@ fn links_set_the_website_and_ping_is_separate() {
     assert_eq!((view.action.as_str(), view.official), ("grants", true));
     assert!(controller.open_link("https://evil.example").is_err());
     let ping = controller.ping(&format!("awakehelix://ping?token={}", "P".repeat(32))).unwrap();
-    assert_eq!(ping.version, "0.5.1");
+    assert_eq!(ping.version, "0.5.2");
     assert!(controller.ping("awakehelix://grants").is_err());
 
     // Signed in to one website, a link to another drops that session.
@@ -386,7 +416,8 @@ fn grants_sign_in_once_list_and_revoke_one() {
     assert!(controller.grants_confirm("revoke").unwrap_err().message.contains("Type REVOKE exactly"));
     let outcome = controller.grants_confirm("REVOKE").unwrap();
     assert_eq!((outcome.done, outcome.total, outcome.cancelled), (1, 1, false));
-    assert_eq!(outcome.lines, vec!["Revoked 0xa1 in transaction 0x0 (block 200); bot(s) stopped: 7.".to_string()]);
+    assert_eq!(outcome.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), vec!["Revoked 0xa1 in transaction 0x0 (block 200); bot(s) stopped: 7."]);
+    assert_eq!((outcome.lines[0].code, outcome.lines[0].param("bots")), ("app.revokedStopped", Some("7")));
     assert_eq!(outcome.listing.rows[0].status, "revoked");
     assert_eq!(*events.progress.lock().unwrap(), vec![(0, 1), (1, 1)]);
     // The key stays for more work; nothing is pending any more.
@@ -402,6 +433,9 @@ fn extra_row(id: &str, status: &str, revocable: bool, active: bool, reason: &str
         key: "0xkey".into(),
         key_origin: "hosted".into(),
         bot: "no linked bot".into(),
+        bot_state: "none".into(),
+        bot_script: String::new(),
+        bot_id: String::new(),
         valid_until: Some(1),
         remaining_calls: Some(3),
         revocable,
@@ -477,6 +511,9 @@ fn a_failed_revocation_reports_how_many_were_done() {
     *mock.fail_revoke_at.lock().unwrap() = Some(1);
     let error = controller.grants_confirm("REVOKE").unwrap_err();
     assert!(error.message.contains("revoked 1 of 2 before this"), "{}", error.message);
+    // The page translates the wrapper and the cause on their own.
+    assert_eq!((error.msg.code, error.msg.param("done"), error.msg.param("total")), ("app.revokedBefore", Some("1"), Some("2")));
+    assert_eq!(serde_json::to_value(&error.msg).unwrap()["params"]["cause"]["text"], "The chain refused the transaction.");
     // Unlike a refused signing request, the key stays so the user can retry.
     assert!(controller.key_status().is_some());
 }
@@ -551,4 +588,22 @@ fn close_request_keeps_the_website() {
     assert_eq!(controller.api(), "http://127.0.0.1:9");
     controller.load_key(private_key("good")).unwrap();
     assert!(controller.prepare_request().unwrap_err().message.contains("Open a request"));
+}
+
+#[test]
+fn errors_carry_codes_for_the_page() {
+    let (controller, _, _) = setup();
+    let error = controller.prepare_request().unwrap_err();
+    assert_eq!((error.kind, error.msg.code), ("refused", "app.noRequest"));
+    assert_eq!(error.message, error.msg.text);
+    sign_link(&controller);
+    controller.load_key(private_key("good")).unwrap();
+    controller.prepare_request().unwrap();
+    let error = controller.sign("authorize").unwrap_err();
+    assert_eq!((error.msg.code, error.msg.param("word")), ("app.mustType", Some("AUTHORIZE")));
+    let json = serde_json::to_value(&error).unwrap();
+    assert_eq!(json["msg"]["code"], "app.mustType");
+    assert_eq!(json["message"], "Type AUTHORIZE exactly to sign.");
+    assert_eq!(CommandError::busy().msg.code, "app.busy");
+    assert_eq!(CommandError::no_key().msg.code, "app.noKey");
 }

@@ -22,6 +22,7 @@ pub mod icon;
 pub mod integrate;
 pub mod keys;
 pub mod links;
+pub mod message;
 pub mod net;
 pub mod ping;
 pub mod plan;
@@ -47,6 +48,7 @@ pub use flow::{
 };
 pub use keys::{create_keystore, derivation_path, keystore_json, load_key, Kdf, KeyMaterial, KeySource, Prompter, MNEMONIC_WARNING};
 pub use links::{parse_link, Link, LinkAction};
+pub use message::{Message, Param, SiteText};
 pub use net::{HttpClient, HttpRequest, HttpResponse, Transport, TransportError};
 pub use ping::{send_ping, PingResult};
 pub use plan::{

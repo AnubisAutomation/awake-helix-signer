@@ -1,5 +1,6 @@
 // Six languages; the default follows the OS/browser language, the switcher's
 // choice is remembered on this device (a UI preference, never a secret).
+import type { Msg, SiteText } from "../api";
 import { en, type Dictionary, type Key } from "./en";
 import { es } from "./es";
 import { ja } from "./ja";
@@ -95,16 +96,127 @@ function applyDocument(): void {
   }
 }
 
+/** A value a text names: shown as is, or a message translated on its own. */
+export type Value = string | number | Msg;
+export type Params = Record<string, Value>;
+
+/** A translated text and the untranslated details it carries (English or
+ * website texts that have no translation; the page shows them apart, marked
+ * as raw data). */
+export interface Parts {
+  text: string;
+  raw: string[];
+}
+
 /** Fill {placeholders} of a template. */
 export function format(template: string, params: Record<string, string | number> = {}): string {
   return template.replace(/\{(\w+)\}/g, (whole, name: string) => (name in params ? String(params[name]) : whole));
 }
 
-/** The text of a key in the current language (falls back to English, then the key). */
-export function t(key: Key | string, params?: Record<string, string | number>): string {
+function isMsg(value: unknown): value is Msg {
+  return !!value && typeof value === "object" && "code" in value && "text" in value;
+}
+
+function has(key: string): boolean {
+  return key in en;
+}
+
+/** Translate a template and its nested messages; `detail` params are raw. */
+export function tParts(key: Key | string, params: Params = {}): Parts {
   const table = DICTIONARIES[language] as Record<string, string>;
   const template = table[key] ?? (en as Record<string, string>)[key] ?? key;
-  return format(template, params);
+  const raw: string[] = [];
+  const values: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(params)) {
+    if (isMsg(value)) {
+      const parts = msgParts(value);
+      values[name] = parts.text;
+      raw.push(...parts.raw);
+    } else if (name === "detail") {
+      if (String(value)) raw.push(String(value));
+    } else {
+      values[name] = value;
+    }
+  }
+  return { text: format(template, values), raw };
+}
+
+/** The text of a key in the current language (falls back to English, then the key). */
+export function t(key: Key | string, params?: Params): string {
+  return tParts(key, params).text;
+}
+
+/** A message of the core or the backend in the current language. */
+export function msgParts(msg: Msg): Parts {
+  if (msg.code === "website" && msg.site) return siteParts(msg.site);
+  if (msg.code.startsWith("ui:")) return tParts(msg.code.slice(3), msg.params);
+  if (has(`core.${msg.code}`)) return tParts(`core.${msg.code}`, msg.params);
+  // No code of its own: a headline of its kind, and the English text as the detail.
+  const headline = has(`kind.${msg.code}`) ? `kind.${msg.code}` : "kind.other";
+  return { text: t(headline), raw: [msg.text] };
+}
+
+export function msgText(msg: Msg): string {
+  const parts = msgParts(msg);
+  return [parts.text, ...parts.raw].join(" ");
+}
+
+/** What the website said: its code translated here, else its own text. */
+function siteParts(site: SiteText): Parts {
+  const key = `site.${site.code}`;
+  if (site.code && has(key)) return tParts(key, siteParams(site.params));
+  if (language === "zh-Hant") return { text: site.zh || site.en, raw: [] };
+  if (language === "en") return { text: site.en || site.zh, raw: [] };
+  const own = language === "zh-Hans" ? site.zh || site.en : site.en || site.zh;
+  return { text: t("site.untranslated"), raw: [own] };
+}
+
+const DATE_PARAMS = new Set(["min", "max", "next"]);
+
+function siteParams(params: Record<string, unknown>): Params {
+  const values: Params = {};
+  const dates = typeof params.next === "number";
+  for (const [name, value] of Object.entries(params)) {
+    if (dates && DATE_PARAMS.has(name) && typeof value === "number") values[name] = formatDate(value, "UTC") + " UTC";
+    else if (name === "unit") values[name] = unitName(String(value));
+    else if (typeof value === "number") values[name] = formatNumber(value);
+    else values[name] = String(value ?? "");
+  }
+  if (typeof params.field === "string") {
+    const key = `site.field.${params.field}`;
+    values.field = has(key) ? t(key, values) : params.field;
+  }
+  return values;
+}
+
+/** A cap unit: token symbols stay, "lock IDs" is translated. */
+export function unitName(unit: string): string {
+  return unit === "lock IDs" ? t("unit.lockIds") : unit;
+}
+
+/** The BCP 47 locale of the current language. */
+export function locale(): string {
+  return language;
+}
+
+/** A whole number in the current language. */
+export function formatNumber(value: number): string {
+  return new Intl.NumberFormat(locale(), { maximumFractionDigits: 0 }).format(value);
+}
+
+/** A Unix time as date and time in the current language, in UTC or local time. */
+export function formatDate(seconds: number, zone: "UTC" | "local"): string {
+  return new Intl.DateTimeFormat(locale(), {
+    dateStyle: "medium",
+    timeStyle: "medium",
+    hourCycle: "h23",
+    ...(zone === "UTC" ? { timeZone: "UTC" } : {}),
+  }).format(new Date(seconds * 1000));
+}
+
+/** "<utc> UTC (local <local>)" in the current language. */
+export function formatWhen(seconds: number): string {
+  return t("common.when", { utc: formatDate(seconds, "UTC"), local: formatDate(seconds, "local") });
 }
 
 /** Placeholders a template uses, sorted (for the completeness tests). */

@@ -41,7 +41,7 @@ impl std::fmt::Debug for KeyMaterial {
 }
 
 fn material(raw: &[u8], source: &'static str, path: String) -> Result<KeyMaterial> {
-    let invalid = || Error::key("This is not a valid secp256k1 private key.");
+    let invalid = || Error::coded(ErrorKind::Key, crate::msg!("key.invalid", "This is not a valid secp256k1 private key."));
     if raw.len() != 32 {
         return Err(invalid());
     }
@@ -57,10 +57,10 @@ impl KeyMaterial {
         let value = text.trim();
         let value = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")).unwrap_or(value);
         if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(Error::key("A private key is 64 hexadecimal characters (optionally with 0x)."));
+            return Err(Error::coded(ErrorKind::Key, crate::msg!("key.privateKeyFormat", "A private key is 64 hexadecimal characters (optionally with 0x).")));
         }
         let mut raw = Zeroizing::new([0u8; 32]);
-        hex::decode_to_slice(value, raw.as_mut()).map_err(|_| Error::key("A private key is 64 hexadecimal characters (optionally with 0x)."))?;
+        hex::decode_to_slice(value, raw.as_mut()).map_err(|_| Error::coded(ErrorKind::Key, crate::msg!("key.privateKeyFormat", "A private key is 64 hexadecimal characters (optionally with 0x).")))?;
         material(raw.as_ref(), "private-key", String::new())
     }
 
@@ -69,26 +69,26 @@ impl KeyMaterial {
         let text = fs::read(path)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
-            .ok_or_else(|| Error::key(format!("Cannot read the keystore file {}.", path.display())))?;
+            .ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.cannotRead", "Cannot read the keystore file {file}.", file = path.display())))?;
         Self::from_keystore_json(&text, &path.display().to_string(), password)
     }
 
     /// Decrypt keystore JSON text; ``label`` names it in messages.
     pub fn from_keystore_json(text: &str, label: &str, password: &str) -> Result<KeyMaterial> {
         let document: Value =
-            serde_json::from_str(text).map_err(|_| Error::key(format!("Cannot read the keystore file {label}.")))?;
+            serde_json::from_str(text).map_err(|_| Error::coded(ErrorKind::Key, crate::msg!("key.cannotRead", "Cannot read the keystore file {file}.", file = label)))?;
         let is_keystore = document.as_object().map(|map| map.keys().any(|key| key.to_lowercase() == "crypto")).unwrap_or(false);
         if !is_keystore {
-            return Err(Error::key(format!("{label} is not an Ethereum keystore (V3 JSON) file.")));
+            return Err(Error::coded(ErrorKind::Key, crate::msg!("key.notKeystore", "{file} is not an Ethereum keystore (V3 JSON) file.", file = label)));
         }
         let raw = keystore::decrypt(&document, password)
-            .ok_or_else(|| Error::key("Wrong keystore password, or the keystore is damaged."))?;
+            .ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.badPassword", "Wrong keystore password, or the keystore is damaged.")))?;
         let mut loaded = material(&raw, "keystore", String::new())?;
         let stored = document.get("address").map(crate::pyfmt::py_str).unwrap_or_default().to_lowercase();
         let stored = stored.strip_prefix("0x").unwrap_or(&stored);
         if !stored.is_empty() && stored != &loaded.address.to_lower()[2..] {
             loaded.wipe();
-            return Err(Error::key("The keystore's address field does not match its key."));
+            return Err(Error::coded(ErrorKind::Key, crate::msg!("key.addressMismatch", "The keystore's address field does not match its key.")));
         }
         Ok(loaded)
     }
@@ -97,7 +97,7 @@ impl KeyMaterial {
     pub fn from_mnemonic(phrase: &str, index: i64, passphrase: &str) -> Result<KeyMaterial> {
         let path = derivation_path(index)?;
         let words = Zeroizing::new(phrase.split_whitespace().collect::<Vec<_>>().join(" "));
-        let invalid = || Error::key("This is not a valid BIP-39 mnemonic (check the words and their order).");
+        let invalid = || Error::coded(ErrorKind::Key, crate::msg!("key.badMnemonic", "This is not a valid BIP-39 mnemonic (check the words and their order)."));
         let seed = bip39::seed_from_mnemonic(&words, passphrase).ok_or_else(invalid)?;
         let key = bip39::derive_ethereum(&seed, index as u32).ok_or_else(invalid)?;
         material(key.as_ref(), "mnemonic", path).map_err(|_| invalid())
@@ -130,12 +130,12 @@ impl KeyMaterial {
 
     /// The raw key, or the "already wiped" refusal.
     pub(crate) fn raw(&self) -> Result<&Zeroizing<[u8; 32]>> {
-        self.key.as_ref().ok_or_else(|| Error::key("The key was already wiped."))
+        self.key.as_ref().ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.wiped", "The key was already wiped.")))
     }
 
     /// Sign a 32-byte digest.
     pub fn sign_digest(&self, digest: &[u8; 32]) -> Result<RecoverableSignature> {
-        secp::sign_digest(self.raw()?, digest).ok_or_else(|| Error::key("The key was already wiped."))
+        secp::sign_digest(self.raw()?, digest).ok_or_else(|| Error::coded(ErrorKind::Key, crate::msg!("key.wiped", "The key was already wiped.")))
     }
 
     /// EIP-191 ``personal_sign`` of a text: ``0x`` + 130 hex (v = 27/28).
@@ -148,14 +148,14 @@ impl KeyMaterial {
 /// The BIP-44 Ethereum path of one account index.
 pub fn derivation_path(index: i64) -> Result<String> {
     if !(0..=MAX_ACCOUNT_INDEX).contains(&index) {
-        return Err(Error::key("The account index must be between 0 and 2147483647."));
+        return Err(Error::coded(ErrorKind::Key, crate::msg!("key.indexRange", "The account index must be between 0 and 2147483647.")));
     }
     Ok(format!("m/44'/60'/0'/0/{index}"))
 }
 
 fn check_keystore_password(password: &str) -> Result<()> {
     if password.chars().count() < 8 {
-        return Err(Error::key("Use a keystore password of at least 8 characters."));
+        return Err(Error::coded(ErrorKind::Key, crate::msg!("key.passwordShort", "Use a keystore password of at least 8 characters.")));
     }
     Ok(())
 }

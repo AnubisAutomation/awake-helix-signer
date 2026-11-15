@@ -12,17 +12,28 @@ messages and wire formats; nothing in it depends on a GUI or a terminal.
   CustomizeRefused, Chain, Network, HttpStatus, Login, Ping, Io, Cancelled}`,
   serializes kebab-case), `message()` / `Display` = the user-facing English
   text (identical to the Python signer), `status()` and `body()` for HTTP
-  errors, `is_network()`. `Result<T> = std::result::Result<T, Error>`.
+  errors, `is_network()`, and `msg()`: the same message as a `Message`
+  (below). `Result<T> = std::result::Result<T, Error>`.
   The CLI maps `Io` to `Failed: …`, `Cancelled` to exit 1, everything else to
   `Refused: …` exit 2.
 * **Secrets** live only in `KeyMaterial` (a `Zeroizing<[u8; 32]>`, zeroed on
   `wipe()` and on drop) and in `Zeroizing<String>` prompt answers. They never
   appear in an error, a `Debug` output or a progress line.
-* **Progress** is a callback `&dyn Fn(&str)` (`flow::Log`) that receives the
-  same lines the Python signer printed ("Fetching plan from …", "Plan
-  verified …", "Gas limit 385000 (…); maximum fee … DAI.", "Broadcasting
-  type-4 transaction 0x… to … ...", "Waiting for the receipt ...",
-  "Confirmed in block N: …"). Pass `&|_| {}` to ignore them.
+* **Messages have codes.** A `Message { code, params, text, site }` is what
+  the user reads: a stable `code` (`flow.wrongKey`, `log.gas`, …), the values
+  it names (`params`: a text, or a nested `Message` such as a cause or a
+  website answer) and the English `text` the CLI prints. Messages are built
+  with `msg!("code", "English {name}", name = value)`. An error without a code
+  of its own has its kind as the code (`plan`, `network`, …). A website error
+  answer has the code `website` and carries `SiteText { status, code, params,
+  zh, en }` (the website's own code and its Chinese and English texts). The
+  app translates `core.<code>` / `site.<code>` and falls back to the text.
+* **Progress** is a callback `&dyn Fn(&Message)` (`flow::Log`) that receives
+  the same lines the Python signer printed as `line.text` ("Fetching plan
+  from …", "Plan verified …", "Gas limit 385000 (…); maximum fee … DAI.",
+  "Broadcasting type-4 transaction 0x… to … ...", "Waiting for the receipt
+  ...", "Confirmed in block N: …"), each with its code. Pass `&|_| {}` to
+  ignore them.
 * Most structs derive `serde::Serialize` (camelCase) so the app can hand them
   to its web view as JSON: `Summary`, `GrantPlan`, `RevokePlan`, `Rule`,
   `Outcome`, `Listing`, `GrantRow`, `Link`, `PingResult`, `Constants`,
@@ -35,7 +46,7 @@ shown. Runnable examples of every call are in `tests/flows.rs` and
 ## Version and constants
 
 ```rust
-pub const VERSION: &str;                         // "0.5.1"
+pub const VERSION: &str;                         // "0.5.2"
 pub const CHAIN_ID: u64;                         // 6714
 pub const DEFAULT_RPC: &str;                     // https://rpc.anubispace.org
 pub const DEFAULT_API: &str;                     // https://anubis.sivilization.com
@@ -262,7 +273,7 @@ pub struct Website;                              // Send + Sync; cookies only in
 impl Website {
     pub fn new(api: &str, client: Arc<dyn HttpClient>) -> Result<Website>;
     pub fn api(&self) -> &str; pub fn owner(&self) -> Option<Address>; pub fn has_session(&self) -> bool;
-    pub fn login(&self, material: &KeyMaterial, log: Log) -> Result<Address>;  // csrf, challenge, personal_sign, verify
+    pub fn login(&self, material: &KeyMaterial, log: &dyn Fn(&Message)) -> Result<Address>;  // csrf, challenge, personal_sign, verify
     pub fn logout(&self);                        // best effort; forgets the cookies
     pub fn grants(&self) -> Result<Listing>;
     pub fn revoke_call(&self, grant_id: &str) -> Result<Map<String, Value>>;
@@ -272,7 +283,9 @@ pub struct Listing { pub owner: String, pub rows: Vec<GrantRow>, pub scan_comple
                      pub scan_percent: i64, pub truncated: bool, pub delegation: Value }
 impl Listing { pub fn active(&self) -> Vec<&GrantRow>; }        // what "revoke all active" handles
 pub struct GrantRow { pub grant_id: String, pub kind: String, pub status: String, pub key: String,
-                      pub key_origin: String, pub bot: String, pub valid_until: Option<i64>,
+                      pub key_origin: String, pub bot: String, // English, for the CLI
+                      pub bot_state: String, pub bot_script: String, pub bot_id: String, // for the app
+                      pub valid_until: Option<i64>,
                       pub remaining_calls: Option<i64>, pub revocable: bool,
                       pub delegation: String /* helix | none | other */, pub not_revocable_reason: String }
 impl GrantRow { pub fn active(&self) -> bool; pub fn describe(&self) -> String; }
@@ -362,7 +375,7 @@ pub mod icon { pub fn png(size: u32) -> Vec<u8>; pub fn ico(sizes: &[u32]) -> Ve
 
 ## Differences from the Python signer (deliberate)
 
-* The version is 0.5.1.
+* The version is 0.5.2.
 * `Local` in an expiry uses the system time zone with its DST rules for that
   date (Python used the current UTC offset for every date).
 * Inputs on which the Python signer crashed with a traceback (a plan

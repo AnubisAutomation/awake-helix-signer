@@ -106,6 +106,10 @@ macro_rules! fake_or_skip {
     };
 }
 
+fn editor_calls(session: &helix_signer_app_lib::views::SessionView) -> u64 {
+    session.editor.as_ref().map(|editor| editor.remaining_calls).unwrap_or_default()
+}
+
 #[test]
 fn development_constants_need_a_loopback_rpc() {
     let fake = fake_or_skip!();
@@ -136,6 +140,10 @@ fn open_link_verify_edit_authorize() {
     assert_eq!(session.kind, "grant");
     assert_eq!(session.confirm_word, "AUTHORIZE");
     assert!(session.summary.contains(fake.config["owner"].as_str().unwrap()), "{}", session.summary);
+    // The same summary as data, for the page to render in its language.
+    let data = serde_json::to_value(&session.summary_data).unwrap();
+    assert_eq!(data["owner"].as_str().unwrap().to_lowercase(), fake.config["owner"].as_str().unwrap().to_lowercase());
+    assert_eq!(data["grant"]["remainingCalls"], editor_calls(&session));
     let editor = session.editor.clone().expect("a grant has an editor");
     assert_eq!(editor.rules.len(), 2);
     assert_eq!(editor.rules[0].max_per_call, "10");
@@ -144,6 +152,8 @@ fn open_link_verify_edit_authorize() {
     // Out of the website's bounds: refused, the verified plan stays.
     let refused = controller.customize(&json!({ "validUntil": editor.valid_until, "remainingCalls": 999999, "rules": [] })).unwrap_err();
     assert_eq!(refused.kind, "customize", "{}", refused.message);
+    // The website's answer travels with its code, Chinese and English texts.
+    assert_eq!(refused.msg.code, "website", "{:?}", refused.msg);
 
     let until = editor.valid_until - 86400;
     let edited = controller

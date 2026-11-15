@@ -2,10 +2,10 @@
 // edit a grant (expiry, calls, caps), type the confirmation word, sign.
 import { applyEdit, closeRequest, editorChanged, editorDefaults, editorDirty, handleUrl, sign, store, verify } from "../app";
 import { field, h } from "../dom";
-import { buildRequest, combineExpiry, EditError, expiryParts, fieldsOf, LOCAL, outOfRange, ZONES, type EditorPlan, type Fields } from "../editor";
-import { t } from "../i18n";
+import { buildRequest, combineExpiry, EditError, expiryParts, fieldsOf, isLocalZone, LOCAL, outOfRange, ZONES, type EditorPlan, type Fields } from "../editor";
+import { formatDate, formatNumber, getLanguage, t, tParts, unitName, type Parts } from "../i18n";
 import { canSign, requestBusy } from "../machines";
-import { noteText, show, syncLog, utcAndLocal } from "./common";
+import { noteParts, partsNodes, renderSummary, show, syncLog } from "./common";
 
 export class RequestView {
   readonly root = h("section", { class: "page", "data-testid": "page-request" });
@@ -21,7 +21,8 @@ export class RequestView {
   private editorBody = h("div", { class: "editor-body" });
   private editorFor: unknown = null;
   private summaryTitle = h("h3", { class: "small-title" });
-  private summary = h("pre", { class: "summary", "data-testid": "summary" });
+  private summary = h("div", { class: "summary", "data-testid": "summary" });
+  private summaryFor: unknown = null;
   private summaryBox = h("div", { class: "stack" });
   private wordLabel = h("span", { class: "field-label" });
   private word = h("input", { type: "text", autocomplete: "off", autocapitalize: "characters", spellcheck: false, class: "word", "data-testid": "confirm-word" });
@@ -30,7 +31,7 @@ export class RequestView {
   private dirtyNote = h("p", { class: "muted small" });
   private result = h("p", { class: "result", "data-testid": "result" });
   private logTitle = h("h3", { class: "small-title" });
-  private logBox = h("pre", { class: "log", "data-testid": "request-log" });
+  private logBox = h("div", { class: "log", "data-testid": "request-log" });
 
   constructor() {
     this.pasteButton.addEventListener("click", () => this.paste());
@@ -106,7 +107,15 @@ export class RequestView {
 
     const session = "session" in state ? state.session : null;
     show(this.summaryBox, !!session);
-    this.summary.textContent = session?.summary ?? "";
+    // Rendered from the verified data, again after a language change.
+    const summaryKey = session ? [session.summaryData, getLanguage()] : null;
+    if (!session) {
+      this.summaryFor = null;
+      renderSummary(this.summary, null);
+    } else if (!Array.isArray(this.summaryFor) || this.summaryFor[0] !== summaryKey![0] || this.summaryFor[1] !== summaryKey![1]) {
+      this.summaryFor = summaryKey;
+      renderSummary(this.summary, session.summaryData);
+    }
     show(this.signRow, !!session);
     if (session) this.wordLabel.textContent = t("sign.type", { word: session.confirmWord });
     this.word.disabled = state.phase !== "verified";
@@ -114,8 +123,10 @@ export class RequestView {
     const plan = session?.editor ?? null;
     show(this.editorBox, !!plan);
     this.editorTitle.textContent = t("editor.title");
-    if (plan && this.editorFor !== plan) {
+    if (plan && (this.editorFor !== plan || this.editorLanguage !== getLanguage())) {
+      // A new plan, or another language: build the fields again (typed values stay).
       this.editorFor = plan;
+      this.editorLanguage = getLanguage();
       this.buildEditor(plan);
     } else if (!plan) {
       this.editorFor = null;
@@ -129,7 +140,11 @@ export class RequestView {
 
     show(this.result, state.phase === "done");
     if (state.phase === "done") {
-      this.result.textContent = `${t("result.done", { tx: state.result.txHash, block: state.result.block })} ${t(state.result.reported ? "result.reported" : "result.onChain")}`;
+      this.result.replaceChildren(
+        h("span", {}, t("result.done", { tx: state.result.txHash, block: state.result.block })),
+        " ",
+        h("span", {}, t(state.result.reported ? "result.reported" : "result.onChain")),
+      );
     }
     syncLog(this.logBox, store.logs.request);
     show(this.logTitle, store.logs.request.length > 0);
@@ -142,15 +157,16 @@ export class RequestView {
   private timeInput = h("input", { type: "time", step: 1, "data-testid": "edit-time" });
   private zoneInput = h("input", { type: "text", list: "helix-zones", "data-testid": "edit-zone", class: "zone" });
   private callsInput = h("input", { type: "text", inputmode: "numeric", class: "short", "data-testid": "edit-calls" });
+  private editorLanguage = "";
   private ruleInputs: { perCall: HTMLInputElement; perDay: HTMLInputElement }[] = [];
-  private echo = h("p", { class: "muted small", "data-testid": "edit-echo" });
-  private editError = h("p", { class: "error-text", "data-testid": "edit-error" });
+  private echo = h("div", { class: "muted small", "data-testid": "edit-echo" });
+  private editError = h("div", { class: "error-text", "data-testid": "edit-error" });
 
   private fields(): Fields {
     return {
       date: this.dateInput.value,
       time: this.timeInput.value,
-      zone: this.zoneInput.value || LOCAL,
+      zone: isLocalZone(this.zoneInput.value) ? LOCAL : this.zoneInput.value,
       calls: this.callsInput.value,
       rules: this.ruleInputs.map((row) => ({ maxPerCall: row.perCall.value, maxPerDay: row.perDay.value })),
     };
@@ -166,9 +182,9 @@ export class RequestView {
     const fields = store.editor.fields ?? fieldsOf(plan, store.editor.zone);
     this.dateInput.value = fields?.date ?? "";
     this.timeInput.value = fields?.time ?? "";
-    this.zoneInput.value = store.editor.zone;
+    this.zoneInput.value = isLocalZone(store.editor.zone) ? t("editor.zoneLocal") : store.editor.zone;
     this.callsInput.value = fields?.calls ?? String(plan.remainingCalls);
-    const zones = h("datalist", { id: "helix-zones" }, ZONES.map((zone) => h("option", { value: zone })));
+    const zones = h("datalist", { id: "helix-zones" }, ZONES.map((zone) => h("option", { value: zone === LOCAL ? t("editor.zoneLocal") : zone })));
     for (const input of [this.dateInput, this.timeInput, this.zoneInput, this.callsInput]) {
       input.oninput = this.onEdit;
       input.onkeydown = (event) => {
@@ -178,7 +194,7 @@ export class RequestView {
     this.zoneInput.onchange = () => {
       // Changing only the zone re-shows the same moment in that zone.
       const previous = store.editor.zone;
-      const zone = this.zoneInput.value || LOCAL;
+      const zone = isLocalZone(this.zoneInput.value) ? LOCAL : this.zoneInput.value;
       try {
         const moment = combineExpiry(this.dateInput.value, this.timeInput.value, previous);
         store.editor.zone = zone;
@@ -213,7 +229,7 @@ export class RequestView {
         h(
           "div",
           { class: "rules-row" },
-          h("span", { class: "rule-name" }, `${position + 1}. ${rule.method} (${rule.unit})`),
+          h("span", { class: "rule-name" }, t("editor.ruleName", { index: position + 1, method: rule.method, unit: unitName(rule.unit) })),
           h("span", { class: "cap" }, perCall, range(rule.bounds?.maxPerCall)),
           h("span", { class: "cap" }, perDay, range(rule.bounds?.maxPerDay)),
         ),
@@ -226,7 +242,7 @@ export class RequestView {
         field(t("editor.expires"), this.dateInput),
         field(t("editor.time"), this.timeInput),
         field(t("editor.zone"), this.zoneInput, zones),
-        field(t("editor.calls"), this.callsInput),
+        field(t("editor.calls"), this.callsInput, h("span", { class: "field-help", "data-testid": "edit-calls-help" }, t("editor.callsHelp"))),
         h("span", { class: "spacer" }),
         h("button", { type: "button", class: "secondary", onclick: () => void editorDefaults(), "data-testid": "edit-defaults" }, t("editor.defaults")),
         h("button", { type: "button", onclick: () => void applyEdit(), "data-testid": "edit-apply" }, t("editor.apply")),
@@ -235,7 +251,10 @@ export class RequestView {
       table,
       this.editError,
     );
-    this.onEdit();
+    // Rebuilt for a new plan or language: the fields stay, so does a website refusal shown for them.
+    store.editor.fields = this.fields();
+    this.updateEditorNotes();
+    this.updateSign();
   }
 
   private updateEditorNotes(): void {
@@ -246,28 +265,27 @@ export class RequestView {
     const lines: string[] = [];
     try {
       const moment = combineExpiry(fields.date, fields.time, fields.zone);
-      const { utc, local } = utcAndLocal(moment);
-      lines.push(t("editor.echo", { utc, local }));
+      lines.push(t("editor.echo", { utc: formatDate(moment, "UTC"), local: formatDate(moment, "local") }));
     } catch (error) {
       if (error instanceof EditError) lines.push(t(error.key, error.params));
     }
     const until = plan.bounds?.validUntil;
     if (until) {
-      lines.push(t("editor.allowed", { min: utcAndLocal(Number(until.min)).utc + " UTC", max: utcAndLocal(Number(until.max)).utc + " UTC" }));
+      lines.push(t("editor.allowed", { min: formatDate(Number(until.min), "UTC") + " UTC", max: formatDate(Number(until.max), "UTC") + " UTC" }));
     }
     const calls = plan.bounds?.remainingCalls;
-    if (calls) lines.push(t("editor.callsAllowed", { min: calls.min, max: calls.max }));
-    this.echo.textContent = lines.join("\n");
-    let problem = store.editor.error ? noteText(store.editor.error) : "";
-    if (!problem) {
+    if (calls) lines.push(t("editor.callsAllowed", { min: formatNumber(Number(calls.min)), max: formatNumber(Number(calls.max)) }));
+    this.echo.replaceChildren(...lines.map((line) => h("div", {}, line)));
+    let problems: Parts[] = store.editor.error ? [noteParts(store.editor.error)] : [];
+    if (!problems.length) {
       try {
         const request = buildRequest(plan, fields);
-        problem = outOfRange(plan, request).map((item) => t(item.key, item.params)).join(" ");
+        problems = outOfRange(plan, request).map((item) => tParts(item.key, item.params));
       } catch (error) {
-        if (error instanceof EditError) problem = t(error.key, error.params);
+        if (error instanceof EditError) problems = [tParts(error.key, error.params)];
       }
     }
-    this.editError.textContent = problem;
-    if (state.phase === "applying") this.editError.textContent = t("editor.applying");
+    if (state.phase === "applying") problems = [{ text: t("editor.applying"), raw: [] }];
+    this.editError.replaceChildren(...problems.map((parts) => h("div", {}, partsNodes(parts))));
   }
 }

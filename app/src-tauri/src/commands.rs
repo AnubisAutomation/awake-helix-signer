@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use helix_signer_core::{msg, Message};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
@@ -20,7 +21,7 @@ type Shared = Arc<Controller<crate::backend::RealCore>>;
 async fn work<T: Send + 'static>(controller: Shared, job: impl FnOnce(&Controller<crate::backend::RealCore>) -> CommandResult<T> + Send + 'static) -> CommandResult<T> {
     tauri::async_runtime::spawn_blocking(move || job(&controller))
         .await
-        .map_err(|error| CommandError::error(format!("worker failed: {error}")))?
+        .map_err(|error| CommandError::io(format!("worker failed: {error}")))?
 }
 
 #[tauri::command]
@@ -136,21 +137,23 @@ pub fn setup_status(app: AppHandle) -> SetupView {
 }
 
 #[tauri::command]
-pub fn register_links(app: AppHandle) -> CommandResult<String> {
+pub fn register_links(app: AppHandle) -> CommandResult<Message> {
     if desktop::mobile() || cfg!(target_os = "macos") {
-        return Err(CommandError::refused("The system registers awakehelix:// links for this app at install."));
+        return Err(CommandError::refused(msg!("app.linksAtInstall", "The system registers awakehelix:// links for this app at install.")));
     }
     #[cfg(desktop)]
     {
         use tauri_plugin_deep_link::DeepLinkExt;
-        app.deep_link().register(desktop::SCHEME).map_err(|error| CommandError::error(format!("Registration failed: {error}")))?;
+        app.deep_link()
+            .register(desktop::SCHEME)
+            .map_err(|error| CommandError::error(msg!("app.registerFailed", "Registration failed: {detail}", detail = error.to_string())))?;
     }
     let _ = &app;
-    Ok("awakehelix:// links now open this app.".into())
+    Ok(msg!("app.linksRegistered", "awakehelix:// links now open this app."))
 }
 
 #[tauri::command]
-pub fn install_cli() -> CommandResult<String> {
+pub fn install_cli() -> CommandResult<Message> {
     desktop::install_cli()
 }
 
@@ -181,6 +184,16 @@ pub fn selftest_done(app: AppHandle, ok: bool, detail: String) {
         eprintln!("app selftest FAILED: {detail}");
     }
     app.exit(if ok { 0 } else { 1 });
+}
+
+/// The window title in the page's language (the page calls it when the language changes).
+#[tauri::command]
+pub fn set_title(app: AppHandle, title: String) {
+    #[cfg(desktop)]
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_title(&title);
+    }
+    let _ = (&app, &title);
 }
 
 #[tauri::command]

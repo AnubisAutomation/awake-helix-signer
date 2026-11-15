@@ -1,7 +1,7 @@
 // The two working pages as small state machines: what may happen next is
 // decided here (pure functions, unit-tested), the views only render a state
 // and send events.
-import type { LinkView, Listing, Pending, RevokeOutcome, SessionView, SignResult } from "./api";
+import type { LinkView, Listing, Msg, Pending, RevokeOutcome, SessionView, SignResult } from "./api";
 
 // ---------------------------------------------------------------- request
 
@@ -14,21 +14,22 @@ export type RequestState =
   | { phase: "signing"; link: LinkView; session: SessionView }
   | { phase: "done"; link: LinkView; result: SignResult };
 
-/** A status line: a message key with parameters, or a text from the backend. */
-export type Note = { key: string; params?: Record<string, string | number>; tone?: "info" | "error" | "ok" };
+/** A status line: a message key with parameters (a parameter may be a
+ * backend message, translated on its own); key "%msg" shows `params.msg`. */
+export type Note = { key: string; params?: Record<string, string | number | Msg>; tone?: "info" | "error" | "ok" };
 
 export type RequestEvent =
   | { type: "open"; link: LinkView }
-  | { type: "refusedLink"; message: string }
+  | { type: "refusedLink"; message: Msg }
   | { type: "close" }
   | { type: "verify" }
   | { type: "verified"; session: SessionView }
   | { type: "apply" }
   | { type: "applied"; session: SessionView }
-  | { type: "editRefused"; message: string }
+  | { type: "editRefused"; message: Msg }
   | { type: "sign" }
   | { type: "signed"; result: SignResult }
-  | { type: "failed"; message: string; kind?: string }
+  | { type: "failed"; message: Msg; kind?: string }
   | { type: "keyForgotten" };
 
 export const initialRequest: RequestState = { phase: "empty" };
@@ -43,7 +44,7 @@ export function wouldDiscard(state: RequestState): boolean {
   return state.phase === "verified";
 }
 
-const refusal = (message: string, kind?: string): Note => ({
+const refusal = (message: Msg, kind?: string): Note => ({
   key: kind === "error" ? "status.error" : "status.refused",
   params: { message },
   tone: "error",
@@ -118,7 +119,7 @@ export type GrantsState = {
 export type GrantsEvent =
   | { type: "load" }
   | { type: "listed"; listing: Listing; quiet?: boolean }
-  | { type: "failed"; message: string; kind?: string }
+  | { type: "failed"; message: Msg; kind?: string }
   | { type: "select"; grantId: string | null }
   | { type: "prepare" }
   | { type: "prepared"; pending: Pending }

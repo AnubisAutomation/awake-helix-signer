@@ -20,6 +20,7 @@ use serde_json::{json, Map, Value};
 use crate::address::Address;
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::KeyMaterial;
+use crate::message::Message;
 use crate::net::{error_body, is_loopback, json_object, origin, urlsplit, user_agent, validate_url, HttpClient, HttpRequest};
 use crate::pyfmt::py_str;
 use crate::summary::when;
@@ -64,7 +65,7 @@ fn hostname(url: &str) -> String {
 pub fn check_challenge(message: Option<&str>, owner: &Address, api: &str, chain_id: u64) -> Result<String> {
     let message = message.ok_or_else(|| Error::login("The website sent no sign-in message."))?;
     let lines: Vec<&str> = message.split('\n').collect();
-    let not_ours = || Error::login("The website's sign-in message is not for this account; nothing was signed.");
+    let not_ours = || Error::coded(ErrorKind::Login, crate::msg!("login.notOurs", "The website's sign-in message is not for this account; nothing was signed."));
     let domain = lines[0]
         .strip_suffix(" wants you to sign in with your Ethereum account:")
         .filter(|domain| !domain.is_empty() && !domain.chars().any(char::is_whitespace))
@@ -101,8 +102,15 @@ pub struct GrantRow {
     pub key: String,
     /// ``hosted`` or ``unknown``.
     pub key_origin: String,
-    /// Linked bot, as text.
+    /// Linked bot, as text (English, for ``grants list``).
     pub bot: String,
+    /// The linked bot for the app: ``none`` (no linked bot), ``unknown``
+    /// (hosted key, bot unknown), ``deleted``, ``running`` or ``stopped``.
+    pub bot_state: String,
+    /// The bot's script name ("" when the website names none).
+    pub bot_script: String,
+    /// The bot's ID ("" when none).
+    pub bot_id: String,
     /// Unix seconds.
     pub valid_until: Option<i64>,
     /// Calls left.
@@ -157,6 +165,31 @@ impl GrantRow {
             self.calls_text()
         )
     }
+}
+
+/// The linked bot: (state, script, id); see [`GrantRow::bot_state`].
+fn bot_parts(row: &Map<String, Value>) -> (&'static str, String, String) {
+    let Some(Value::Object(bot)) = row.get("bot") else {
+        let hosted = row.get("keyOrigin").and_then(Value::as_str) == Some("hosted");
+        let policy = row.get("kind").and_then(Value::as_str) == Some("policy");
+        return (if hosted && policy { "unknown" } else { "none" }, String::new(), String::new());
+    };
+    let script = match bot.get("script") {
+        Some(script) if crate::pyfmt::truthy(script) => py_str(script),
+        _ => String::new(),
+    };
+    let id = match bot.get("id") {
+        Some(Value::Null) | None => String::new(),
+        Some(id) => py_str(id),
+    };
+    let state = if bot.get("deleted").map(crate::pyfmt::truthy).unwrap_or(false) {
+        "deleted"
+    } else if bot.get("status").and_then(Value::as_str) == Some("active") {
+        "running"
+    } else {
+        "stopped"
+    };
+    (state, script, id)
 }
 
 fn bot_text(row: &Map<String, Value>) -> String {
@@ -221,7 +254,7 @@ fn int_of(value: Option<&Value>) -> i64 {
 /// Parse ``GET /api/grants`` and require it to be this owner's.
 pub fn parse_listing(raw: &Map<String, Value>, owner: &str) -> Result<Listing> {
     if raw.get("owner").map(py_str).unwrap_or_default().to_lowercase() != owner.to_lowercase() {
-        return Err(Error::login("The website listed the grants of another account."));
+        return Err(Error::coded(ErrorKind::Login, crate::msg!("login.otherListing", "The website listed the grants of another account.")));
     }
     let malformed = || Error::login("The website's grant list is malformed.");
     let rows = raw.get("grants").and_then(Value::as_array).ok_or_else(malformed)?;
@@ -240,6 +273,9 @@ pub fn parse_listing(raw: &Map<String, Value>, owner: &str) -> Result<Listing> {
             key: text("key", ""),
             key_origin: text("keyOrigin", "unknown"),
             bot: bot_text(row),
+            bot_state: bot_parts(row).0.to_string(),
+            bot_script: bot_parts(row).1,
+            bot_id: bot_parts(row).2,
             valid_until: optional_int(row.get("validUntilUnix")),
             remaining_calls: optional_int(row.get("remainingCalls")),
             revocable: row.get("revocable") == Some(&Value::Bool(true)),
@@ -378,7 +414,7 @@ impl Website {
     }
 
     /// Sign in with the loaded key (a signature only, never a transaction).
-    pub fn login(&self, material: &KeyMaterial, log: &dyn Fn(&str)) -> Result<Address> {
+    pub fn login(&self, material: &KeyMaterial, log: &dyn Fn(&Message)) -> Result<Address> {
         let owner = material.address();
         let timeout = Duration::from_secs(30);
         let answer = (|| -> Result<Map<String, Value>> {
@@ -393,7 +429,12 @@ impl Website {
             let challenge = self.call("/api/auth/challenge", "POST", Some(&json!({"wallet": owner.to_lower()})), timeout)?;
             let message = challenge.get("message").and_then(Value::as_str).map(str::to_string);
             let domain = check_challenge(message.as_deref(), &owner, &self.api, crate::constants::CHAIN_ID)?;
-            log(&format!("Signing in to {domain} as {owner} (a signature only; no transaction) ..."));
+            log(&crate::msg!(
+                "log.signingIn",
+                "Signing in to {domain} as {owner} (a signature only; no transaction) ...",
+                domain = &domain,
+                owner = owner
+            ));
             let message = message.unwrap_or_default();
             let signature = material.sign_message(&message)?;
             self.call(
@@ -404,12 +445,14 @@ impl Website {
             )
         })()
         .map_err(|error| match error.kind() {
-            ErrorKind::HttpStatus => Error::login(format!("The website refused the sign-in: {error}")),
+            ErrorKind::HttpStatus => {
+                Error::coded(ErrorKind::Login, crate::msg!("login.refused", "The website refused the sign-in: {error}", error = &error))
+            }
             ErrorKind::Network => error.into_kind(ErrorKind::Login),
             _ => error,
         })?;
         if answer.get("wallet").map(py_str).unwrap_or_default().to_lowercase() != owner.to_lower() {
-            return Err(Error::login("The website signed in another account."));
+            return Err(Error::coded(ErrorKind::Login, crate::msg!("login.otherAccount", "The website signed in another account.")));
         }
         if let Ok(mut state) = self.state.lock() {
             state.owner = Some(owner);

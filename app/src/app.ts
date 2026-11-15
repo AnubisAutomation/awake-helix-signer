@@ -1,7 +1,7 @@
 // The app's state and actions. Views render `store` and call these actions;
 // every decision about what is safe to sign happens in the backend and the
 // core library, this only sequences the commands and shows their results.
-import { api, on, type AppInfo, type CommandError, type KeySource, type KeyView, type LinkView, type LogEvent, type PingView, type SessionView, type SetupView } from "./api";
+import { api, errorMsg, on, plainMsg, type AppInfo, type CommandError, type KeySource, type KeyView, type LinkView, type LogEvent, type Msg, type PingView, type SessionView, type SetupView } from "./api";
 import { buildRequest, EditError, fieldsOf, isDirty, LOCAL, type CustomizeRequest, type Fields } from "./editor";
 import { classify, firstLink, tokenLink } from "./links";
 import {
@@ -21,7 +21,9 @@ import {
   type RequestState,
 } from "./machines";
 import { confirmDialog } from "./dom";
-import { t } from "./i18n";
+import { en } from "./i18n/en";
+import { onLanguage, t } from "./i18n";
+import { msgNote, type LogEntry } from "./views/common";
 
 export type Tab = "request" | "grants" | "computer";
 export type KeyKind = KeySource["kind"];
@@ -40,7 +42,7 @@ export interface PingState {
   phase: "sending" | "linked" | "failed";
   api: string;
   result?: PingView;
-  message?: string;
+  message?: Msg;
   countdown?: number;
 }
 
@@ -54,7 +56,7 @@ export interface Store {
   request: RequestState;
   grants: GrantsState;
   editor: { fields: Fields | null; zone: string; error: Note | null; refused: CustomizeRequest | null };
-  logs: { request: string[]; grants: string[] };
+  logs: { request: LogEntry[]; grants: LogEntry[] };
   status: Note | null;
   setup: SetupView | null;
   ping: PingState | null;
@@ -99,12 +101,17 @@ export function useSecrets(value: SecretInputs): void {
   secrets = value;
 }
 
-function note(key: string, params?: Record<string, string | number>, tone?: Note["tone"]): Note {
+function note(key: string, params?: Note["params"], tone?: Note["tone"]): Note {
   return { key, params, tone };
 }
 
 function errorNote(error: CommandError): Note {
-  return note(error.kind === "error" ? "status.error" : "status.refused", { message: error.message }, "error");
+  return note(error.kind === "error" ? "status.error" : "status.refused", { message: errorMsg(error) }, "error");
+}
+
+/** A refusal found here (not by the backend), shown with one of the page's own texts. */
+export function uiError(key: keyof typeof en): CommandError {
+  return { kind: "nokey", message: en[key], msg: { code: `ui:${key}`, params: {}, text: en[key] } };
 }
 
 function dispatchRequest(event: RequestEvent): void {
@@ -125,8 +132,8 @@ export function setTab(tab: Tab): void {
   changed();
 }
 
-export function log(scope: "request" | "grants", line: string): void {
-  store.logs[scope] = [...store.logs[scope], line].slice(-500);
+export function log(scope: "request" | "grants", entry: LogEntry): void {
+  store.logs[scope] = [...store.logs[scope], entry].slice(-500);
   changed();
 }
 
@@ -152,7 +159,7 @@ export async function handleUrl(url: string): Promise<void> {
       changed();
       return;
     }
-    if (wouldDiscard(store.request) && !(await confirmDialog(t("request.discard"), t("common.yes"), t("common.no")))) return;
+    if (wouldDiscard(store.request) && !(await confirmDialog(() => t("request.discard"), () => t("common.yes"), () => t("common.no")))) return;
   }
   try {
     const link = await api.openLink(target);
@@ -169,7 +176,7 @@ export async function handleUrl(url: string): Promise<void> {
     dispatchRequest({ type: "open", link });
   } catch (error) {
     store.tab = "request";
-    dispatchRequest({ type: "refusedLink", message: (error as CommandError).message });
+    dispatchRequest({ type: "refusedLink", message: errorMsg(error as CommandError) });
   }
 }
 
@@ -186,17 +193,17 @@ export function keySource(): KeySource {
   const form = store.keyForm;
   const typed = secrets.read();
   if (form.source === "keystore") {
-    if (!form.path && !form.json) throw { kind: "nokey", message: t("key.needFile") } satisfies CommandError;
+    if (!form.path && !form.json) throw uiError("key.needFile");
     return form.path
       ? { kind: "keystore", path: form.path, password: typed.password }
       : { kind: "keystore", json: form.json, password: typed.password };
   }
   if (form.source === "privateKey") {
-    if (!typed.privateKey.trim()) throw { kind: "nokey", message: t("key.needSecret") } satisfies CommandError;
+    if (!typed.privateKey.trim()) throw uiError("key.needSecret");
     return { kind: "privateKey", secret: typed.privateKey };
   }
-  if (!typed.mnemonic.trim()) throw { kind: "nokey", message: t("key.needSecret") } satisfies CommandError;
-  if (!/^\d{1,6}$/.test(form.index.trim() || "0")) throw { kind: "nokey", message: t("key.badIndex") } satisfies CommandError;
+  if (!typed.mnemonic.trim()) throw uiError("key.needSecret");
+  if (!/^\d{1,6}$/.test(form.index.trim() || "0")) throw uiError("key.badIndex");
   return { kind: "mnemonic", phrase: typed.mnemonic, index: Number(form.index.trim() || "0") };
 }
 
@@ -211,7 +218,7 @@ async function ensureKey(scope: "request" | "grants"): Promise<KeyView> {
   try {
     const key = await api.loadKey(source);
     store.key = key;
-    log(scope, t("key.loaded", { address: key.address }));
+    log(scope, note("key.loaded", { address: key.address }));
     return key;
   } finally {
     store.keyBusy = false;
@@ -273,7 +280,7 @@ export async function verify(): Promise<void> {
     store.editor.refused = null;
     showSession(session);
     dispatchRequest({ type: "verified", session });
-    log("request", session.summary);
+    log("request", { summary: session.summaryData });
     changed();
   } catch (error) {
     await requestFailed(error as CommandError);
@@ -282,8 +289,8 @@ export async function verify(): Promise<void> {
 
 async function requestFailed(error: CommandError): Promise<void> {
   resetEditor();
-  dispatchRequest({ type: "failed", message: error.message, kind: error.kind });
-  log("request", t(error.kind === "error" ? "status.error" : "status.refused", { message: error.message }));
+  dispatchRequest({ type: "failed", message: errorMsg(error), kind: error.kind });
+  log("request", errorNote(error));
   await syncKey();
 }
 
@@ -331,14 +338,14 @@ async function customize(request: CustomizeRequest | Record<string, never>): Pro
     store.editor.refused = null;
     showSession(session);
     dispatchRequest({ type: "applied", session });
-    log("request", session.summary);
+    log("request", { summary: session.summaryData });
     changed();
   } catch (error) {
     const problem = error as CommandError;
     if (problem.kind === "customize") {
       store.editor.refused = "validUntil" in request ? (request as CustomizeRequest) : null;
-      dispatchRequest({ type: "editRefused", message: problem.message });
-      store.editor.error = note("status.refused", { message: problem.message }, "error");
+      dispatchRequest({ type: "editRefused", message: errorMsg(problem) });
+      store.editor.error = note("status.refused", { message: errorMsg(problem) }, "error");
       changed();
       return;
     }
@@ -361,8 +368,8 @@ export async function sign(word: string): Promise<boolean> {
     const result = await api.sign(word.trim());
     dispatchRequest({ type: "signed", result });
     resetEditor();
-    const message = `${t("result.done", { tx: result.txHash, block: result.block })} ${t(result.reported ? "result.reported" : "result.onChain")}`;
-    log("request", message);
+    log("request", note("result.done", { tx: result.txHash, block: result.block }, "ok"));
+    log("request", note(result.reported ? "result.reported" : "result.onChain"));
     store.status = { key: "result.done", params: { tx: result.txHash, block: result.block }, tone: "ok" };
     await syncKey();
     return true;
@@ -391,7 +398,7 @@ function schedulePoll(): void {
       dispatchGrants({ type: "listed", listing: await api.grantsLoad(), quiet: true });
       schedulePoll();
     } catch (error) {
-      log("grants", t("status.refused", { message: (error as CommandError).message }));
+      log("grants", errorNote(error as CommandError));
     }
   }, SCAN_POLL_MS);
 }
@@ -410,8 +417,8 @@ export async function loadGrants(): Promise<void> {
 }
 
 function grantsFailed(error: CommandError): void {
-  log("grants", t(error.kind === "error" ? "status.error" : "status.refused", { message: error.message }));
-  dispatchGrants({ type: "failed", message: error.message, kind: error.kind });
+  log("grants", errorNote(error));
+  dispatchGrants({ type: "failed", message: errorMsg(error), kind: error.kind });
 }
 
 export function selectGrant(grantId: string | null): void {
@@ -426,7 +433,7 @@ export async function prepareRevoke(all: boolean): Promise<void> {
   dispatchGrants({ type: "prepare" });
   try {
     const pending = await api.grantsPrepare(ids);
-    pending.summaries.forEach((summary) => log("grants", summary));
+    pending.summaryData.forEach((summary) => log("grants", { summary }));
     dispatchGrants({ type: "prepared", pending });
     if (pending.count === 0) await loadGrants();
   } catch (error) {
@@ -444,9 +451,9 @@ export async function confirmRevoke(word: string): Promise<boolean> {
   dispatchGrants({ type: "confirm" });
   try {
     const outcome = await api.grantsConfirm(word.trim());
-    outcome.lines.forEach((line) => log("grants", line));
+    outcome.lines.forEach((line) => log("grants", msgNote(line)));
     dispatchGrants({ type: "finished", outcome });
-    log("grants", t(outcome.done < outcome.total ? "grants.finishedCancelled" : "grants.finished", { done: outcome.done, total: outcome.total }));
+    log("grants", note(outcome.done < outcome.total ? "grants.finishedCancelled" : "grants.finished", { done: outcome.done, total: outcome.total }));
     schedulePoll();
     return true;
   } catch (error) {
@@ -463,7 +470,7 @@ export async function cancelRevoke(): Promise<void> {
   const phase = store.grants.phase;
   if (phase !== "pending" && phase !== "revoking") return;
   await api.grantsCancel().catch(() => undefined);
-  if (phase === "pending") log("grants", t("grants.cancelled"));
+  if (phase === "pending") log("grants", note("grants.cancelled"));
   dispatchGrants({ type: "cancel" });
 }
 
@@ -480,7 +487,7 @@ export async function refreshSetup(): Promise<void> {
 
 export async function registerLinks(): Promise<void> {
   try {
-    store.status = { key: "%raw", params: { text: await api.registerLinks() }, tone: "ok" };
+    store.status = msgNote(await api.registerLinks(), "ok");
   } catch (error) {
     store.status = errorNote(error as CommandError);
   }
@@ -489,9 +496,9 @@ export async function registerLinks(): Promise<void> {
 
 export async function installCli(): Promise<void> {
   const places = store.setup?.cliPlaces.join(" / ") ?? "~/.local/bin";
-  if (!(await confirmDialog(t("computer.installCliConfirm", { places }), t("common.yes"), t("common.no")))) return;
+  if (!(await confirmDialog(() => t("computer.installCliConfirm", { places }), () => t("common.yes"), () => t("common.no")))) return;
   try {
-    store.status = { key: "%raw", params: { text: await api.installCli() }, tone: "ok" };
+    store.status = msgNote(await api.installCli(), "ok");
   } catch (error) {
     store.status = errorNote(error as CommandError);
   }
@@ -503,11 +510,11 @@ export async function firstRun(): Promise<void> {
   await refreshSetup();
   if (!store.setup?.firstRun) return;
   await api.markFirstRun().catch(() => undefined);
-  if (!(await confirmDialog(t("computer.firstRun"), t("common.yes"), t("common.no")))) return;
+  if (!(await confirmDialog(() => t("computer.firstRun"), () => t("common.yes"), () => t("common.no")))) return;
   await registerLinks();
   if (store.setup?.canInstallCli) {
     try {
-      store.status = { key: "%raw", params: { text: await api.installCli() }, tone: "ok" };
+      store.status = msgNote(await api.installCli(), "ok");
     } catch (error) {
       store.status = errorNote(error as CommandError);
     }
@@ -527,7 +534,7 @@ export async function runPing(url: string): Promise<void> {
     changed();
     if (store.info?.launchedForPing && !store.info.mobile) countdown();
   } catch (error) {
-    store.ping = { phase: "failed", api: "", message: (error as CommandError).message };
+    store.ping = { phase: "failed", api: "", message: errorMsg(error as CommandError) };
     changed();
   }
 }
@@ -557,11 +564,21 @@ export function closePing(): void {
 
 // ------------------------------------------------------------------- boot
 
+let titleFollows = false;
+
+/** The window title follows the selected language. */
+function syncTitle(): void {
+  if (store.info) void api.setTitle(`${t("app.title")} ${store.info.version}`).catch(() => undefined);
+}
+
 export async function start(): Promise<void> {
   store.info = await api.appInfo();
+  syncTitle();
+  if (!titleFollows) onLanguage(syncTitle);
+  titleFollows = true;
   document.documentElement.dataset.os = store.info.os;
   await on<string>("signer://link", (url) => void handleUrl(url));
-  await on<LogEvent>("signer://log", (event) => log(event.scope, event.line));
+  await on<LogEvent>("signer://log", (event) => log(event.scope, msgNote(event.msg ?? plainMsg("log", event.line))));
   await on<{ done: number; total: number }>("signer://progress", (event) => grantsProgress(event.done, event.total));
   await on<null>("signer://key-wiped", () => keyWiped());
   await on<string[]>("deep-link://new-url", (urls) => {

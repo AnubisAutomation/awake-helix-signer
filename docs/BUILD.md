@@ -61,11 +61,11 @@ Outputs go to `dist/<platform>/` (never committed), each file with a `<file>.sha
 
 | Platform | Files |
 |---|---|
-| linux | `awake-helix-signer-0.5.1-linux-x86_64.AppImage`, `awake-helix-signer-0.5.1-linux-x86_64.deb`, `awake-helix-signer-0.5.1-linux-x86_64-cli.tar.gz` |
-| windows | `awake-helix-signer-0.5.1-windows-x64-setup.exe`, `awake-helix-signer-0.5.1-windows-x64-cli.exe` |
-| android | `awake-helix-signer-0.5.1-android-universal.apk` |
-| macos | `awake-helix-signer-0.5.1-macos-arm64.dmg` (or `-x86_64` / `-universal`), `awake-helix-signer-0.5.1-macos-<arch>-cli.tar.gz` |
-| ios | `awake-helix-signer-0.5.1-ios-unsigned.ipa` (for SideStore/AltStore), or `awake-helix-signer-0.5.1-ios.ipa` with `APPLE_DEVELOPMENT_TEAM`; never published |
+| linux | `awake-helix-signer-0.5.2-linux-x86_64.AppImage`, `awake-helix-signer-0.5.2-linux-x86_64.deb`, `awake-helix-signer-0.5.2-linux-x86_64-cli.tar.gz` |
+| windows | `awake-helix-signer-0.5.2-windows-x64-setup.exe`, `awake-helix-signer-0.5.2-windows-x64-cli.exe` |
+| android | `awake-helix-signer-0.5.2-android-universal.apk` |
+| macos | `awake-helix-signer-0.5.2-macos-arm64.dmg` (or `-x86_64` / `-universal`), `awake-helix-signer-0.5.2-macos-<arch>-cli.tar.gz` |
+| ios | `awake-helix-signer-0.5.2-ios-unsigned.ipa` (for SideStore/AltStore), or `awake-helix-signer-0.5.2-ios.ipa` with `APPLE_DEVELOPMENT_TEAM`; never published |
 
 Each build smoke-tests what it made: Linux runs the CLI, checks the `.deb` (CLI in `/usr/bin`, `x-scheme-handler/awakehelix` in the desktop file) and runs the app's `--selftest` (the real WebKitGTK window renders every page in every language and opens sample links through the core) under Xvfb from both the `.deb` layout and the AppImage; Windows runs the CLI `.exe` under Wine and checks both executables; Android verifies the APK with `apksigner` and `aapt2` (package, version, both ABIs, the `awakehelix://` BROWSABLE intent filter) and, when `/dev/kvm` works, boots an emulator, installs the APK and opens `awakehelix://grants` with it; macOS verifies the ad-hoc signature, the URL scheme and runs `--selftest`.
 
@@ -97,10 +97,10 @@ For the release workflow the same key is stored as repository secrets (see *Rele
 
 - **Windows**: the installer is not code-signed yet, so SmartScreen says "Windows protected your PC": choose *More info* → *Run anyway* after checking the file's SHA-256. The installer installs for the current user and downloads Microsoft's WebView2 runtime if it is missing (internet needed once).
 - **macOS**: the app is ad-hoc signed, not notarized: open the `.dmg`, drag the app to *Applications*, then right-click it → *Open* → *Open* (or *System Settings → Privacy & Security → Open Anyway*). Run it from *Applications* so links open it.
-- **Linux**: `sudo apt install ./awake-helix-signer-0.5.1-linux-x86_64.deb`, or `chmod +x` the AppImage and run it (it asks once whether to register links and add the terminal command).
+- **Linux**: `sudo apt install ./awake-helix-signer-0.5.2-linux-x86_64.deb`, or `chmod +x` the AppImage and run it (it asks once whether to register links and add the terminal command).
 - **Android**: check the APK's SHA-256 against `SHA256SUMS` (or the download page), allow *Install unknown apps* for the browser or file manager that opens the APK (Settings → Apps → Special access), install, and turn the permission off again. Links from the website in the phone's browser then open the app; keystore files are imported with the file picker.
 - **iOS** (your own iPhone only; no iOS download is offered):
-  - **Unsigned IPA (default) with SideStore or AltStore**: copy `awake-helix-signer-0.5.1-ios-unsigned.ipa` to the iPhone (AirDrop, Files) and open it with SideStore/AltStore (*My Apps → +*). It signs the app with your Apple ID while installing and refreshes it before it expires (7 days with a free Apple ID). Links from the website (`awakehelix://`) then open the app.
+  - **Unsigned IPA (default) with SideStore or AltStore**: copy `awake-helix-signer-0.5.2-ios-unsigned.ipa` to the iPhone (AirDrop, Files) and open it with SideStore/AltStore (*My Apps → +*). It signs the app with your Apple ID while installing and refreshes it before it expires (7 days with a free Apple ID). Links from the website (`awakehelix://`) then open the app.
   - **Signed IPA** (`APPLE_DEVELOPMENT_TEAM` set): build in Terminal on the Mac itself — over SSH `codesign` cannot use the login keychain (`errSecInternalComponent`). Install it from Xcode (*Window → Devices and Simulators*), then *Settings → General → VPN & Device Management → Developer App → Trust*.
   - The iOS build needs iOS 15 or later; it also needs `brew install xcodegen cocoapods` on the Mac.
 

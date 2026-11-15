@@ -80,7 +80,7 @@ p { margin: 4px 0; }
 .row.end { justify-content: flex-end; }
 .spacer { flex: 1; }
 .stack { display: flex; flex-direction: column; gap: 6px; }
-.site { white-space: pre-wrap; word-break: break-word; }
+.site { word-break: break-word; }
 .header { padding-bottom: 8px; }
 .settings select { width: auto; }
 
@@ -155,6 +155,14 @@ main .page { border-top-left-radius: 0; }
   margin: 0;
 }
 .log { max-height: 180px; color: var(--muted); }
+.summary-line.indent-1, .log-line.indent-1 { padding-left: 2ch; }
+.summary-line.indent-2, .log-line.indent-2 { padding-left: 5ch; }
+.summary-line.indent-0 + .summary-line.indent-1 { margin-top: 2px; }
+/* Untranslated details (English or website texts): shown apart, never mixed into a sentence. */
+.raw { display: block; opacity: 0.8; font-size: 0.92em; margin-top: 2px; }
+.status .raw, .error-text .raw { display: block; }
+.site { display: flex; flex-wrap: wrap; column-gap: 1.5em; }
+.field-help { display: block; max-width: 28em; font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
 .sign-row { margin-top: 10px; }
 .result { color: var(--ok); font-weight: 600; word-break: break-all; }
 .status { margin: 10px 2px; min-height: 1.4em; white-space: pre-wrap; word-break: break-word; }
@@ -221,3 +229,5 @@ dialog.modal::backdrop { background: rgba(0, 0, 0, 0.45); }
   .sign-row button { flex: 1; }
   progress { width: 100%; }
 }
+
+.scan-note + .scan-note::before { content: " · "; }

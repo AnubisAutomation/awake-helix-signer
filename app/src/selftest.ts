@@ -6,6 +6,7 @@ import { api } from "./api";
 import { closeRequest, handleUrl, setTab, store } from "./app";
 import { en } from "./i18n/en";
 import { DICTIONARIES, LANGUAGES, getLanguage, placeholders, setLanguage } from "./i18n";
+import { audit } from "./i18n/audit";
 import type { Shell } from "./views/shell";
 
 export async function selftest(shell: Shell): Promise<{ ok: boolean; detail: string }> {
@@ -27,6 +28,8 @@ export async function selftest(shell: Shell): Promise<{ ok: boolean; detail: str
     for (const tab of ["request", "grants", "computer"] as const) {
       setTab(tab);
       check(shell.root.querySelector(`[data-testid=page-${tab}]:not([hidden])`) !== null, `${language}: page ${tab} hidden`);
+      // Nothing on the page may come from another language.
+      for (const leak of audit(document.body, language).slice(0, 3)) problems.push(`${language}: ${tab}: ${leak.reason}: ${leak.text.slice(0, 80)}`);
     }
   }
   setLanguage(original);

@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use helix_signer_core::{msg, Message};
 use serde_json::Value;
 
 use crate::backend::{Core, KeyInput, LinkInfo};
@@ -25,7 +26,7 @@ pub const IDLE_WIPE: Duration = Duration::from_secs(600);
 
 /// Where the controller reports progress (Tauri events in the app).
 pub trait Events: Send + Sync {
-    fn log(&self, scope: &'static str, line: &str);
+    fn log(&self, scope: &'static str, line: &Message);
     fn progress(&self, done: usize, total: usize);
     fn key_wiped(&self);
 }
@@ -33,7 +34,7 @@ pub trait Events: Send + Sync {
 /// Discards everything (tests that do not look at events).
 pub struct NoEvents;
 impl Events for NoEvents {
-    fn log(&self, _: &'static str, _: &str) {}
+    fn log(&self, _: &'static str, _: &Message) {}
     fn progress(&self, _: usize, _: usize) {}
     fn key_wiped(&self) {}
 }
@@ -100,8 +101,8 @@ impl<C: Core> Controller<C> {
         Ok(Busy(self))
     }
 
-    fn log_to(&self, scope: &'static str) -> impl Fn(&str) + Sync + '_ {
-        move |line: &str| self.events.log(scope, line)
+    fn log_to(&self, scope: &'static str) -> impl Fn(&Message) + Sync + '_ {
+        move |line: &Message| self.events.log(scope, line)
     }
 
     pub fn is_busy(&self) -> bool {
@@ -192,7 +193,7 @@ impl<C: Core> Controller<C> {
 
     pub fn export_keystore(&self, password: &str) -> CommandResult<String> {
         if password.chars().count() < 8 {
-            return Err(CommandError::refused("Use a password of at least 8 characters."));
+            return Err(CommandError::refused(msg!("app.passwordShort", "Use a password of at least 8 characters.")));
         }
         let key = self.lock().key.clone().ok_or_else(CommandError::no_key)?;
         let mut copy = key;
@@ -233,7 +234,7 @@ impl<C: Core> Controller<C> {
             let link = state.link.clone().filter(|link| link.action == "sign" || link.action == "revoke");
             (link, state.key.clone())
         };
-        let link = link.ok_or_else(|| CommandError::refused("Open a request from the website first."))?;
+        let link = link.ok_or_else(|| CommandError::refused(msg!("app.noRequest", "Open a request from the website first.")))?;
         let mut key = key.ok_or_else(CommandError::no_key)?;
         let log = self.log_to("request");
         let result = self.core.prepare(&link, &key, &log);
@@ -255,9 +256,9 @@ impl<C: Core> Controller<C> {
     /// Ask the website to re-plan the grant; `{}` restores the defaults.
     pub fn customize(&self, request: &Value) -> CommandResult<SessionView> {
         let busy = self.begin()?;
-        let session = self.lock().session.clone().ok_or_else(|| CommandError::refused("There is no verified plan to edit."))?;
+        let session = self.lock().session.clone().ok_or_else(|| CommandError::refused(msg!("app.noPlanToEdit", "There is no verified plan to edit.")))?;
         if self.core.session_view(&session).editor.is_none() {
-            return Err(CommandError::refused("Only a grant can be edited."));
+            return Err(CommandError::refused(msg!("app.grantOnly", "Only a grant can be edited.")));
         }
         let log = self.log_to("request");
         match self.core.customize(&session, request, &log) {
@@ -281,10 +282,10 @@ impl<C: Core> Controller<C> {
         let busy = self.begin()?;
         let (session, key) = {
             let mut state = self.lock();
-            let session = state.session.clone().ok_or_else(|| CommandError::refused("There is no verified plan to sign."))?;
+            let session = state.session.clone().ok_or_else(|| CommandError::refused(msg!("app.noPlanToSign", "There is no verified plan to sign.")))?;
             let expected = self.core.session_view(&session).confirm_word;
             if word.trim() != expected {
-                return Err(CommandError::refused(format!("Type {expected} exactly to sign.")));
+                return Err(CommandError::refused(msg!("app.mustType", "Type {word} exactly to sign.", word = expected.as_str())));
             }
             let key = state.key.take().ok_or_else(CommandError::no_key)?;
             state.session = None;
@@ -300,7 +301,7 @@ impl<C: Core> Controller<C> {
 
     // ------------------------------------------------------------ grants
 
-    fn site(&self, key: &C::Key, log: &(dyn Fn(&str) + Sync)) -> CommandResult<Arc<C::Site>> {
+    fn site(&self, key: &C::Key, log: &(dyn Fn(&Message) + Sync)) -> CommandResult<Arc<C::Site>> {
         if let Some(site) = self.lock().site.clone() {
             if self.core.signed_in(&site) {
                 return Ok(site);
@@ -335,13 +336,17 @@ impl<C: Core> Controller<C> {
         };
         let mut key = key.ok_or_else(CommandError::no_key)?;
         let site = site.filter(|site| self.core.signed_in(site)).ok_or_else(CommandError::no_key)?;
-        let listing = listing.ok_or_else(|| CommandError::refused("Load the grants first."))?;
+        let listing = listing.ok_or_else(|| CommandError::refused(msg!("app.loadGrantsFirst", "Load the grants first.")))?;
         let ids: Vec<String> = match grant_ids {
             Some(ids) => {
                 for id in &ids {
                     let known = listing.rows.iter().any(|row| row.grant_id.eq_ignore_ascii_case(id) && row.revocable);
                     if !known {
-                        return Err(CommandError::refused(format!("{id} is not a revocable grant of this account.")));
+                        return Err(CommandError::refused(msg!(
+                            "app.notRevocable",
+                            "{grant} is not a revocable grant of this account.",
+                            grant = id.as_str()
+                        )));
                     }
                 }
                 ids
@@ -352,11 +357,14 @@ impl<C: Core> Controller<C> {
         let log = self.log_to("grants");
         let mut sessions = Vec::new();
         let mut summaries = Vec::new();
+        let mut summary_data = Vec::new();
         let mut failure = None;
         for id in &ids {
             match self.core.prepare_grant_revoke(&site, id, &key, &log) {
                 Ok(Some(session)) => {
-                    summaries.push(self.core.session_view(&session).summary);
+                    let view = self.core.session_view(&session);
+                    summaries.push(view.summary);
+                    summary_data.push(view.summary_data);
                     sessions.push(session);
                 }
                 Ok(None) => {}
@@ -372,14 +380,14 @@ impl<C: Core> Controller<C> {
         }
         let count = sessions.len();
         self.lock().pending = sessions;
-        Ok(PendingView { count, summaries })
+        Ok(PendingView { count, summaries, summary_data })
     }
 
     /// Sign, broadcast and confirm the verified revocations one by one.
     pub fn grants_confirm(&self, word: &str) -> CommandResult<RevokeOutcome> {
         let _busy = self.begin()?;
         if word.trim() != "REVOKE" {
-            return Err(CommandError::refused("Type REVOKE exactly to sign."));
+            return Err(CommandError::refused(msg!("app.mustType", "Type {word} exactly to sign.", word = "REVOKE")));
         }
         let (sessions, key, site) = {
             let mut state = self.lock();
@@ -387,7 +395,7 @@ impl<C: Core> Controller<C> {
             (sessions, state.key.clone(), state.site.clone())
         };
         if sessions.is_empty() {
-            return Err(CommandError::refused("Nothing is waiting to be revoked."));
+            return Err(CommandError::refused(msg!("app.nothingPending", "Nothing is waiting to be revoked.")));
         }
         let mut key = key.ok_or_else(CommandError::no_key)?;
         let site = site.ok_or_else(CommandError::no_key)?;
@@ -405,17 +413,25 @@ impl<C: Core> Controller<C> {
             match self.core.execute_grant_revoke(session, &key, &site, &log) {
                 Ok(result) => {
                     done += 1;
-                    let note = if result.stopped_bots.is_empty() {
-                        String::new()
+                    let grant = self.core.grant_of(session);
+                    let line = if result.stopped_bots.is_empty() {
+                        msg!(
+                            "app.revoked",
+                            "Revoked {grant} in transaction {tx} (block {block}).",
+                            grant = grant,
+                            tx = result.tx_hash.as_str(),
+                            block = result.block
+                        )
                     } else {
-                        format!("; bot(s) stopped: {}", result.stopped_bots.join(", "))
+                        msg!(
+                            "app.revokedStopped",
+                            "Revoked {grant} in transaction {tx} (block {block}); bot(s) stopped: {bots}.",
+                            grant = grant,
+                            tx = result.tx_hash.as_str(),
+                            block = result.block,
+                            bots = result.stopped_bots.join(", ")
+                        )
                     };
-                    let line = format!(
-                        "Revoked {} in transaction {} (block {}){note}.",
-                        self.core.grant_of(session),
-                        result.tx_hash,
-                        result.block
-                    );
                     self.events.log("grants", &line);
                     lines.push(line);
                     self.events.progress(done, total);
@@ -430,7 +446,8 @@ impl<C: Core> Controller<C> {
         self.core.wipe(&mut key);
         let cancelled = done < total && failure.is_none();
         if let Some(error) = failure {
-            return Err(CommandError { kind: error.kind, message: format!("{} (revoked {done} of {total} before this)", error.message) });
+            let wrapped = msg!("app.revokedBefore", "{cause} (revoked {done} of {total} before this)", cause = error.msg, done = done, total = total);
+            return Err(CommandError::new(error.kind, wrapped));
         }
         let listing = self.core.grants(&site)?;
         self.lock().listing = Some(listing.clone());
@@ -452,7 +469,7 @@ impl<C: Core> Controller<C> {
     pub fn ping(&self, url: &str) -> CommandResult<PingView> {
         let link = self.core.parse_link(url)?;
         if link.action != "ping" {
-            return Err(CommandError::refused("This is not an install-check link."));
+            return Err(CommandError::refused(msg!("app.notPing", "This is not an install-check link.")));
         }
         self.core.ping(&link)
     }

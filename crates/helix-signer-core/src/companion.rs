@@ -623,6 +623,7 @@ impl Companion {
     pub fn run_job(&self, id: &str) {
         let Some(job) = self.job_state(id) else { return };
         let log = |line: &str| (self.out)(line);
+        let progress = |line: &crate::message::Message| (self.out)(&line.text);
         let outcome = (|| -> Result<Option<flow::Outcome>> {
             if !self.keys.loaded() {
                 self.update(id, "unlocking", None, None);
@@ -633,7 +634,7 @@ impl Companion {
             log(&format!("\nRequest from the website: {}", if job.kind == "grant" { "AUTHORIZE a hosted bot" } else { "REVOKE a grant" }));
             let config = &self.config;
             let session = if job.kind == "grant" {
-                flow::prepare_sign(&job.token, &config.api, &config.rpc_url, &config.constants, Some(&material), &config.transport, &log)?
+                flow::prepare_sign(&job.token, &config.api, &config.rpc_url, &config.constants, Some(&material), &config.transport, &progress)?
             } else {
                 flow::prepare_revoke(
                     &config.rpc_url,
@@ -641,7 +642,7 @@ impl Companion {
                     RevokeSource::Plan { token: job.token.clone(), api: config.api.clone() },
                     Some(&material),
                     &config.transport,
-                    &log,
+                    &progress,
                 )?
             };
             log(&"=".repeat(72));
@@ -657,9 +658,9 @@ impl Companion {
             }
             self.update(id, "broadcasting", None, None);
             let outcome = if job.kind == "grant" {
-                flow::execute_sign(&session, material, &log)?
+                flow::execute_sign(&session, material, &progress)?
             } else {
-                flow::execute_revoke(&session, material, &log)?
+                flow::execute_revoke(&session, material, &progress)?
             };
             let _ = self.keys.unlock();
             Ok(Some(outcome))

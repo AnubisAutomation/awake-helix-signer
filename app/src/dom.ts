@@ -1,4 +1,5 @@
 // A tiny DOM builder: h("button", { onclick }, "text").
+import { onLanguage } from "./i18n";
 type Child = Node | string | number | null | undefined | false | Child[];
 type Attrs = Record<string, unknown>;
 
@@ -43,25 +44,31 @@ export function field(label: string, control: HTMLElement, extra?: Child): HTMLL
   return h("label", { class: "field" }, h("span", { class: "field-label" }, label), control, extra);
 }
 
-/** Ask a yes/no question in an in-page dialog (no OS dialog permission needed). */
-export function confirmDialog(text: string, yes: string, no: string): Promise<boolean> {
+/** A text that is computed again when the language changes. */
+export type Text = () => string;
+
+/** Ask a yes/no question in an in-page dialog (no OS dialog permission
+ * needed); its texts follow a language change while it is open. */
+export function confirmDialog(text: Text, yes: Text, no: Text): Promise<boolean> {
   return new Promise((resolve) => {
     const dialog = h("dialog", { class: "modal", "data-testid": "confirm-dialog" });
+    const question = h("p", { class: "modal-text" });
+    const noButton = h("button", { type: "button", class: "secondary", onclick: () => done(false), "data-testid": "confirm-no" });
+    const yesButton = h("button", { type: "button", onclick: () => done(true), "data-testid": "confirm-yes" });
+    const render = () => {
+      question.textContent = text();
+      noButton.textContent = no();
+      yesButton.textContent = yes();
+    };
+    const stop = onLanguage(render);
     const done = (value: boolean) => {
-      dialog.close();
+      stop();
+      dialog.close?.();
       dialog.remove();
       resolve(value);
     };
-    fill(
-      dialog,
-      h("p", { class: "modal-text" }, text),
-      h(
-        "div",
-        { class: "row end" },
-        h("button", { type: "button", class: "secondary", onclick: () => done(false), "data-testid": "confirm-no" }, no),
-        h("button", { type: "button", onclick: () => done(true), "data-testid": "confirm-yes" }, yes),
-      ),
-    );
+    render();
+    fill(dialog, question, h("div", { class: "row end" }, noButton, yesButton));
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       done(false);

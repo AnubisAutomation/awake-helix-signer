@@ -1,4 +1,5 @@
 import type { LinkView, Listing, SessionView } from "../src/api";
+import { grantSummary, m } from "./fixtures";
 import {
   canSign,
   grantsButtons,
@@ -15,14 +16,14 @@ import {
 } from "../src/machines";
 
 const link: LinkView = { action: "sign", api: "https://anubis.sivilization.com", official: true };
-const session: SessionView = { kind: "grant", confirmWord: "AUTHORIZE", summary: "summary", editor: { validUntil: 1, remainingCalls: 2, bounds: {}, rules: [] } };
+const session: SessionView = { kind: "grant", confirmWord: "AUTHORIZE", summary: "summary", summaryData: grantSummary(2), editor: { validUntil: 1, remainingCalls: 2, bounds: {}, rules: [] } };
 const listing = (rows: Partial<Listing["rows"][number]>[], scanComplete = true): Listing => ({
   owner: "0xowner",
   scanComplete,
   scanPercent: scanComplete ? 100 : 40,
   truncated: false,
   rows: rows.map((row, index) => ({
-    grantId: `0x${index}`, kind: "policy", status: "active", key: "0xkey", keyOrigin: "hosted", bot: "bot",
+    grantId: `0x${index}`, kind: "policy", status: "active", key: "0xkey", keyOrigin: "hosted", bot: "bot", botState: "running", botScript: "bot", botId: "1",
     validUntil: 1, remainingCalls: 1, revocable: true, active: true, delegation: "helix", notRevocableReason: "", ...row,
   })),
 });
@@ -53,16 +54,16 @@ describe("request machine", () => {
     const verified = run([{ type: "open", link }, { type: "verify" }, { type: "verified", session }]);
     const applying = requestReducer(verified, { type: "apply" });
     expect(applying.phase).toBe("applying");
-    const refused = requestReducer(applying, { type: "editRefused", message: "out of range" });
+    const refused = requestReducer(applying, { type: "editRefused", message: m("plan", "out of range") });
     expect(refused).toMatchObject({ phase: "verified", session, message: { key: "status.refused", tone: "error" } });
     const applied = requestReducer(requestReducer(refused, { type: "apply" }), { type: "applied", session: { ...session, summary: "new" } });
     expect(applied).toMatchObject({ phase: "verified", session: { summary: "new" } });
   });
 
   it("a refusal ends the request but keeps the link to retry", () => {
-    const failed = run([{ type: "open", link }, { type: "verify" }, { type: "failed", message: "bad plan" }]);
-    expect(failed).toMatchObject({ phase: "ready", link, message: { key: "status.refused", params: { message: "bad plan" } } });
-    const error = run([{ type: "open", link }, { type: "verify" }, { type: "failed", message: "boom", kind: "error" }]);
+    const failed = run([{ type: "open", link }, { type: "verify" }, { type: "failed", message: m("plan", "bad plan") }]);
+    expect(failed).toMatchObject({ phase: "ready", link, message: { key: "status.refused", params: { message: m("plan", "bad plan") } } });
+    const error = run([{ type: "open", link }, { type: "verify" }, { type: "failed", message: m("plan", "boom"), kind: "error" }]);
     expect(error).toMatchObject({ message: { key: "status.error" } });
   });
 
@@ -78,13 +79,13 @@ describe("request machine", () => {
     const verifying = run([{ type: "open", link }, { type: "verify" }]);
     expect(requestReducer(verifying, { type: "open", link: { ...link, action: "revoke" } })).toBe(verifying);
     expect(requestReducer(verifying, { type: "close" })).toBe(verifying);
-    expect(requestReducer(verifying, { type: "refusedLink", message: "x" })).toBe(verifying);
+    expect(requestReducer(verifying, { type: "refusedLink", message: m("plan", "x") })).toBe(verifying);
   });
 
   it("opens revoke links, and grants/ping links leave the page empty", () => {
     expect(run([{ type: "open", link: { ...link, action: "revoke" } }]).phase).toBe("ready");
     expect(run([{ type: "open", link: { ...link, action: "grants" } }]).phase).toBe("empty");
-    expect(run([{ type: "refusedLink", message: "foreign" }])).toMatchObject({ phase: "empty", message: { key: "link.refused" } });
+    expect(run([{ type: "refusedLink", message: m("plan", "foreign") }])).toMatchObject({ phase: "empty", message: { key: "link.refused" } });
   });
 
   it("forgetting the key drops a verified plan", () => {
@@ -137,7 +138,7 @@ describe("grants machine", () => {
     state = grantsReducer(state, { type: "select", grantId: "0x1" });
     expect(grantsButtons(state).revokeSelected).toBe(true); // expired but still on chain
     state = grantsReducer(state, { type: "prepare" });
-    state = grantsReducer(state, { type: "prepared", pending: { count: 1, summaries: ["s"] } });
+    state = grantsReducer(state, { type: "prepared", pending: { count: 1, summaries: ["s"], summaryData: [] } });
     expect(state.phase).toBe("pending");
     expect(grantsButtons(state)).toMatchObject({ confirm: true, cancel: true, revokeAll: false, load: false });
     state = grantsReducer(state, { type: "confirm" });
@@ -151,7 +152,7 @@ describe("grants machine", () => {
   });
 
   it("revoke all, then cancel while revoking stops after the current one", () => {
-    let state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 2, summaries: [] } }, { type: "confirm" }]);
+    let state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 2, summaries: [], summaryData: [] } }, { type: "confirm" }]);
     state = grantsReducer(state, { type: "cancel" });
     expect(state).toMatchObject({ phase: "revoking", stopping: true, message: { key: "grants.stopping" } });
     expect(grantsButtons(state).cancel).toBe(false);
@@ -160,19 +161,19 @@ describe("grants machine", () => {
   });
 
   it("cancel before signing discards the verified revocations", () => {
-    const state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 1, summaries: [] } }, { type: "cancel" }]);
+    const state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 1, summaries: [], summaryData: [] } }, { type: "cancel" }]);
     expect(state).toMatchObject({ phase: "listed", pending: null, message: { key: "grants.cancelled" } });
   });
 
   it("nothing to revoke goes back to the list", () => {
-    const state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 0, summaries: [] } }]);
+    const state = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "prepare" }, { type: "prepared", pending: { count: 0, summaries: [], summaryData: [] } }]);
     expect(state).toMatchObject({ phase: "listed", message: { key: "grants.nothing" } });
   });
 
   it("a refusal keeps the list (and the key) for a retry", () => {
     const listed = grants([{ type: "load" }, { type: "listed", listing: list }]);
-    expect(grantsReducer(grantsReducer(listed, { type: "load" }), { type: "failed", message: "x" })).toMatchObject({ phase: "listed", listing: list });
-    expect(grants([{ type: "load" }, { type: "failed", message: "login refused" }])).toMatchObject({ phase: "locked", message: { params: { message: "login refused" } } });
+    expect(grantsReducer(grantsReducer(listed, { type: "load" }), { type: "failed", message: m("plan", "x") })).toMatchObject({ phase: "listed", listing: list });
+    expect(grants([{ type: "load" }, { type: "failed", message: m("plan", "login refused") }])).toMatchObject({ phase: "locked", message: { params: { message: m("plan", "login refused") } } });
   });
 
   it("polls while the website scans and ignores a quiet poll mid-action", () => {
@@ -184,7 +185,7 @@ describe("grants machine", () => {
   });
 
   it("selection is frozen while a revocation is pending", () => {
-    const pending = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "select", grantId: "0x0" }, { type: "prepare" }, { type: "prepared", pending: { count: 1, summaries: [] } }]);
+    const pending = grants([{ type: "load" }, { type: "listed", listing: list }, { type: "select", grantId: "0x0" }, { type: "prepare" }, { type: "prepared", pending: { count: 1, summaries: [], summaryData: [] } }]);
     expect(grantsReducer(pending, { type: "select", grantId: "0x1" }).selected).toBe("0x0");
     expect(grantsReducer(pending, { type: "forget" })).toEqual(initialGrants);
   });

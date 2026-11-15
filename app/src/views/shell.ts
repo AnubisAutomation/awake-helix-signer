@@ -2,9 +2,9 @@
 // three pages, the status line and the install-check overlay.
 import { closePing, setTab, store, subscribe, type Tab } from "../app";
 import { h } from "../dom";
-import { getLanguage, LANGUAGES, NAMES, onLanguage, setLanguage, t, type Language } from "../i18n";
+import { getLanguage, LANGUAGES, msgParts, NAMES, onLanguage, setLanguage, t, type Language } from "../i18n";
 import { setTheme, storedTheme, type Theme } from "../theme";
-import { noteText, show } from "./common";
+import { noteParts, partsNodes, show } from "./common";
 import { ComputerView } from "./computer";
 import { GrantsView } from "./grants";
 import { KeyView } from "./key";
@@ -16,8 +16,8 @@ export class Shell {
   private site = h("p", { class: "muted small site", "data-testid": "site-line" });
   private tagline = h("p", { class: "muted small" });
   private dev = h("p", { class: "warning small" });
-  private language = h("select", { "data-testid": "language", "aria-label": "Language" });
-  private theme = h("select", { "data-testid": "theme", "aria-label": "Theme" });
+  private language = h("select", { "data-testid": "language" });
+  private theme = h("select", { "data-testid": "theme" });
   private tabs = new Map<Tab, HTMLButtonElement>();
   private key = new KeyView();
   private request = new RequestView();
@@ -27,7 +27,8 @@ export class Shell {
   private ping = h("div", { class: "overlay", "data-testid": "ping" });
 
   constructor() {
-    for (const language of LANGUAGES) this.language.appendChild(h("option", { value: language }, NAMES[language]));
+    // Each language is named in its own language (the one place another language shows).
+    for (const language of LANGUAGES) this.language.appendChild(h("option", { value: language, lang: language, "data-raw": "" }, NAMES[language]));
     this.language.value = getLanguage();
     this.language.addEventListener("change", () => setLanguage(this.language.value as Language));
     for (const theme of ["auto", "light", "dark"] as const) this.theme.appendChild(h("option", { value: theme }));
@@ -65,9 +66,10 @@ export class Shell {
     const api = store.link?.api ?? info?.defaultApi ?? "";
     const official = store.link ? store.link.official : true;
     this.site.replaceChildren(
-      t("app.website", { api }),
-      official ? "" : h("strong", { class: "warning-inline" }, ` (${t("app.notOfficial")})`),
-      info ? `   ${t("app.chain", { chainId: info.chainId })}   ${t("app.rpc", { rpc: info.rpc })}` : "",
+      h("span", {}, t("app.website", { api })),
+      official ? "" : h("strong", { class: "warning-inline" }, t("app.notOfficial")),
+      info ? h("span", {}, t("app.chain", { chainId: info.chainId })) : "",
+      info ? h("span", {}, t("app.rpc", { rpc: info.rpc })) : "",
     );
     this.tagline.textContent = t("app.tagline");
     this.dev.textContent = t("app.development");
@@ -89,7 +91,7 @@ export class Shell {
     this.request.update();
     this.grants.update();
     this.computer.update();
-    this.status.textContent = noteText(store.status);
+    this.status.replaceChildren(...partsNodes(noteParts(store.status)));
     this.status.className = `status ${store.status?.tone ?? "info"}`;
     this.updatePing();
   }
@@ -103,16 +105,21 @@ export class Shell {
     }
     const text =
       ping.phase === "sending"
-        ? t("ping.sending", { api: ping.api || store.link?.api || store.info?.defaultApi || "" })
+        ? { text: t("ping.sending", { api: ping.api || store.link?.api || store.info?.defaultApi || "" }), raw: [] }
         : ping.phase === "linked" && ping.result
-          ? t("ping.linked")
-          : t("ping.failed", { message: ping.message ?? "" });
+          ? { text: t("ping.linked"), raw: [] }
+          : ping.message
+            ? (() => {
+                const parts = msgParts(ping.message);
+                return { text: t("ping.failed", { message: parts.text }), raw: parts.raw };
+              })()
+            : { text: t("ping.failed", { message: "" }), raw: [] };
     this.ping.replaceChildren(
       h(
         "div",
         { class: "card modal-card" },
         h("h2", {}, t("ping.title")),
-        h("p", { "data-testid": "ping-text", class: ping.phase === "failed" ? "error-text" : "" }, text),
+        h("p", { "data-testid": "ping-text", class: ping.phase === "failed" ? "error-text" : "" }, partsNodes(text)),
         ping.result ? h("p", { class: "muted small" }, t("ping.details", { ...ping.result })) : null,
         ping.countdown ? h("p", { class: "muted small" }, t("ping.closes", { seconds: ping.countdown })) : null,
         h("div", { class: "row end" }, h("button", { type: "button", onclick: () => closePing(), "data-testid": "ping-close", disabled: ping.phase === "sending" }, t("common.close"))),
