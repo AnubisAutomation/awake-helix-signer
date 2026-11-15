@@ -208,11 +208,23 @@ class FakeChain:
             return self.receipts.get(params[0].lower())
         if method == "eth_call":
             return self._call(params[0])
+        if method == "eth_getStorageAt":
+            return self._storage(params[0].lower(), params[1].lower())
         raise ValueError(f"unsupported {method}")
+
+    def _storage(self, owner: str, slot: str) -> str:
+        """Helix7702Account layout: ``grants`` at slot 0, ``policyGrants`` at slot 2."""
+        for table, base in ((self.policy, 2), (self.session, 0)):
+            for grant, key in table.get(owner, {}).items():
+                if "0x" + keccak(bytes.fromhex(grant[2:]) + base.to_bytes(32, "big")).hex() == slot:
+                    return "0x" + key[2:].lower().rjust(64, "0")
+        return "0x" + "00" * 32
 
     def _call(self, call: dict[str, str]) -> str:
         owner, data = call["to"].lower(), call["data"].lower()
         grant = "0x" + data[10:]
+        if self.code.get(owner, b"") != bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower()):
+            return "0x"  # no Helix code runs at an account not delegated to it
         if data.startswith(c.selector("policyGrants(bytes32)")):
             key = self.policy.get(owner, {}).get(grant, c.ZERO)
             return "0x" + encode(["address", "bytes16", "uint48", "uint48", "uint32"], [key, bytes(16), 0, 0, 0]).hex()

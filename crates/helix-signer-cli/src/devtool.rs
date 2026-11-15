@@ -103,7 +103,14 @@ fn operate(op: &Value) -> Result<Value> {
         }
         "verify_revoke" => {
             let verified = plan::verify_revoke_plan(op.get("plan").unwrap_or(&Value::Null), &constants)?;
-            let summary = summary::revoke_summary(&verified, &state_of(op), op.get("api").and_then(Value::as_str), text(op, "rpc"), &constants);
+            // The former Python signer only revoked on an account delegated to the
+            // pinned implementation, so a recorded revoke without "state" is that
+            // one; "plain" (re-delegate and revoke) must be asked for explicitly.
+            let mut state = state_of(op);
+            if op.get("state").is_none() {
+                state.kind = AccountKind::Pinned;
+            }
+            let summary = summary::revoke_summary(&verified, &state, op.get("api").and_then(Value::as_str), text(op, "rpc"), &constants);
             Ok(json!({"plan": verified, "summary": summary.text()}))
         }
         "offline_revoke" => Ok(json!(plan::offline_revoke(text(op, "owner"), text(op, "grant"), text(op, "kind"), &constants)?)),

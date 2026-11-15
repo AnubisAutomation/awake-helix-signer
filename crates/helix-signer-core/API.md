@@ -35,7 +35,7 @@ shown. Runnable examples of every call are in `tests/flows.rs` and
 ## Version and constants
 
 ```rust
-pub const VERSION: &str;                         // "0.5.0"
+pub const VERSION: &str;                         // "0.5.1"
 pub const CHAIN_ID: u64;                         // 6714
 pub const DEFAULT_RPC: &str;                     // https://rpc.anubispace.org
 pub const DEFAULT_API: &str;                     // https://anubis.sivilization.com
@@ -180,7 +180,8 @@ pub struct RuleSummary { pub index: usize /* 1-based, for --cap */, pub kind: u8
     pub unit: String, pub decimals: u32, pub max_per_call: String, pub max_per_day: String,
     pub activation_dai: Option<String>, pub deadline_seconds: Option<u64> }
 pub struct SwapSummary { pub token_in, pub token_in_name, pub token_out, pub token_out_name, pub price_floor: String }
-pub struct RevokeSummary { pub method: String, pub grant_id: String, pub grant_kind: GrantKind, pub delegation: String }
+pub struct RevokeSummary { pub method: String, pub grant_id: String, pub grant_kind: GrantKind, pub delegation: String,
+                           pub redelegates: bool /* plain account: the type-4 tx re-delegates */, pub delegate: Address }
 impl Summary { pub fn text(&self) -> String; pub fn lines(&self) -> Vec<String>; }  // = Python summary.py
 pub fn when(seconds: u64) -> String;             // "2026-11-10 12:00:00 UTC (local 2026-11-10 13:00:00 CET)"
 pub mod summary { grant_summary(), revoke_summary(), dai(), named() }
@@ -234,15 +235,18 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
                       material: Option<&KeyMaterial>, transport: &Transport, log: Log) -> Result<Session>;
 pub fn execute_sign(session: &Session, material: KeyMaterial, log: Log) -> Result<Outcome>;
 pub fn execute_revoke(session: &Session, material: KeyMaterial, log: Log) -> Result<Outcome>;
-        // consume and wipe the key. Plain EOA: one type-4 tx (authorization nonce = account nonce + 1);
-        // delegated to the pinned delegate: type-2 self-call; delegated elsewhere / contract: refused.
+        // consume and wipe the key. Plain EOA: one type-4 tx (authorization nonce = account nonce + 1),
+        // for an install and for revoking a dormant grant still stored in an un-delegated account (the
+        // grant is found with eth_getStorageAt at Helix7702Account's slots; the tx re-delegates, then
+        // revokes); delegated to the pinned delegate: type-2 self-call; delegated elsewhere / contract: refused.
         // Gas: eth_estimateGas with authorizationList, else with a delegation state override, else a
         // fixed fallback; the DAI balance must cover gas x maxFeePerGas. Then receipt, on-chain checks
-        // (code = 0xef0100||delegate, PolicyGrantInstalled, policyGrants / key cleared), report (3 tries).
+        // (code = 0xef0100||delegate after installs and revocations, PolicyGrantInstalled, policyGrants /
+        // key cleared), report (3 tries).
 pub fn flow::revoke_call_plan(call: &Value, owner: &Address, grant_id: &str, constants: &Constants) -> Result<RevokePlan>;
 pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, constants: &Constants,
                             material: &KeyMaterial, transport: &Transport, log: Log) -> Result<Option<Session>>;
-        // None: already revoked (409) or not on chain
+        // None: already revoked (409) or not on chain; Err(Flow) for a 409 with reason otherDelegation
 pub fn execute_grant_revoke(session: &Session, material: &KeyMaterial, site: &Website, log: Log) -> Result<Outcome>;
         // signs with a copy (the key stays for the next grant), then POST revoke-confirm
 
@@ -269,8 +273,12 @@ pub struct Listing { pub owner: String, pub rows: Vec<GrantRow>, pub scan_comple
 impl Listing { pub fn active(&self) -> Vec<&GrantRow>; }        // what "revoke all active" handles
 pub struct GrantRow { pub grant_id: String, pub kind: String, pub status: String, pub key: String,
                       pub key_origin: String, pub bot: String, pub valid_until: Option<i64>,
-                      pub remaining_calls: Option<i64>, pub revocable: bool }
+                      pub remaining_calls: Option<i64>, pub revocable: bool,
+                      pub delegation: String /* helix | none | other */, pub not_revocable_reason: String }
 impl GrantRow { pub fn active(&self) -> bool; pub fn describe(&self) -> String; }
+        // active(): revocable and active | not_yet_valid | inactive
+pub fn website::status_text(status: &str, not_revocable_reason: &str) -> String;  // grants list label;
+        // an unknown status is shown as it is
 pub fn check_challenge(message: Option<&str>, owner: &Address, api: &str, chain_id: u64) -> Result<String>;
 ```
 
@@ -354,7 +362,7 @@ pub mod icon { pub fn png(size: u32) -> Vec<u8>; pub fn ico(sizes: &[u32]) -> Ve
 
 ## Differences from the Python signer (deliberate)
 
-* The version is 0.5.0.
+* The version is 0.5.1.
 * `Local` in an expiry uses the system time zone with its DST rules for that
   date (Python used the current UTC offset for every date).
 * Inputs on which the Python signer crashed with a traceback (a plan

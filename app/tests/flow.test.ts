@@ -33,6 +33,7 @@ function listing(revoked: string[] = []): Listing {
     grantId, kind: "policy", status: revoked.includes(grantId) ? "revoked" : status, key: "0x70f6c48e3afc7e499ff2329d698474fd293626bc",
     keyOrigin: "hosted", bot: "dai-power #12 (running)", validUntil: 1794816462, remainingCalls: 254,
     revocable: !revoked.includes(grantId), active: !revoked.includes(grantId) && status === "active",
+    delegation: "helix", notRevocableReason: "",
   });
   return { owner: OWNER.toLowerCase(), rows: [row("0xa1", "active"), row("0xb2", "active"), row("0xc3", "expired")], scanComplete: true, scanPercent: 100, truncated: false };
 }
@@ -44,7 +45,7 @@ class FakeBackend implements Transport {
   revoked: string[] = [];
   pending: string[] = [];
   answers: Record<string, (args: Record<string, unknown>) => unknown> = {
-    app_info: () => ({ version: "0.5.0", os: "linux", arch: "x86_64", mobile: false, chainId: 6714, rpc: "https://rpc.anubispace.org", defaultApi: API, development: false, selftest: false, launchedForPing: false }),
+    app_info: () => ({ version: "0.5.1", os: "linux", arch: "x86_64", mobile: false, chainId: 6714, rpc: "https://rpc.anubispace.org", defaultApi: API, development: false, selftest: false, launchedForPing: false }),
     initial_link: () => null,
     open_link: ({ url }) => {
       const value = String(url);
@@ -99,7 +100,7 @@ class FakeBackend implements Transport {
       return null;
     },
     setup_status: () => ({ os: "linux", mobile: false, handler: "awake-helix-signer-app.desktop", command: null, canRegister: true, canInstallCli: true, cliPlaces: ["/home/u/.local/bin"], firstRun: false }),
-    ping: () => ({ version: "0.5.0", os: "linux", arch: "x86_64", api: API }),
+    ping: () => ({ version: "0.5.1", os: "linux", arch: "x86_64", api: API }),
   };
 
   async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -285,6 +286,63 @@ describe("My grants", () => {
     await click("grants-confirm");
     expect($("status").textContent).toBe("Revoked 1 of 1 grant(s).");
     expect($<HTMLButtonElement>("grants-revoke-all").disabled).toBe(true);
+  });
+
+  it("labels every status, explains it, and offers Revoke only where revocable", async () => {
+    const base = listing().rows[0];
+    const rows = [
+      { ...base, grantId: "0xd1", status: "inactive", revocable: true, active: true, delegation: "none" },
+      { ...base, grantId: "0xd2", status: "inactive", revocable: false, active: false, delegation: "other", notRevocableReason: "otherDelegation" },
+      { ...base, grantId: "0xd3", status: "unavailable", revocable: false, active: false, remainingCalls: null },
+      { ...base, grantId: "0xd4", status: "missing", revocable: false, active: false, remainingCalls: null },
+      { ...base, grantId: "0xd5", status: "frozen_by_dao", revocable: false, active: false },
+    ];
+    backend.answers.grants_load = () => ({ ...listing(), rows });
+    await handleUrl("awakehelix://grants");
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("grants-load");
+    const statusOf = (id: string) => document.querySelector(`[data-grant="${id}"] .cell.status`)!.textContent;
+    expect([statusOf("0xd1"), statusOf("0xd2"), statusOf("0xd3"), statusOf("0xd4")]).toEqual(["inactive", "inactive", "temporarily unreadable", "not installed"]);
+    // An unknown (newer) status gets a neutral label and style; the list still renders.
+    expect(statusOf("0xd5")).toBe("other status (frozen by dao)");
+    expect(document.querySelector('[data-grant="0xd5"]')!.className).toContain("status-other");
+    const notes = $("grants-notes").textContent!;
+    expect(notes).toContain("it becomes active again if the account re-delegates");
+    expect(notes).toContain("never overwrites someone else's delegation");
+    expect(notes).toContain("Press Refresh to try again");
+    expect(notes).toContain("never installed on chain");
+    for (const id of ["0xd2", "0xd3", "0xd4", "0xd5"]) {
+      $<HTMLInputElement>(`grant-select-${id}`).click();
+      await settle();
+      expect($<HTMLButtonElement>("grants-revoke-selected").disabled, id).toBe(true);
+    }
+    $<HTMLInputElement>("grant-select-0xd1").click();
+    await settle();
+    expect($<HTMLButtonElement>("grants-revoke-selected").disabled).toBe(false);
+    expect($<HTMLButtonElement>("grants-revoke-all").disabled).toBe(false);
+    // The retry hint points at the refresh button, which reloads the list.
+    expect($("grants-load").textContent).toBe("Refresh");
+    backend.answers.grants_load = () => listing();
+    await click("grants-load");
+    expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(3);
+    expect($("grants-notes").hidden).toBe(true);
+  });
+
+  it("translates the new statuses in every language", async () => {
+    const { LANGUAGES, setLanguage } = await import("../src/i18n");
+    const { statusText } = await import("../src/views/grants");
+    const seen = new Set<string>();
+    for (const language of LANGUAGES) {
+      setLanguage(language);
+      const labels = ["inactive", "missing", "unavailable"].map(statusText);
+      labels.forEach((label) => expect(label.trim(), language).not.toBe(""));
+      seen.add(labels.join("|"));
+      expect(statusText("brand_new"), language).toContain("brand new");
+      expect(statusText("<img src=x>"), language).not.toContain("<");
+    }
+    expect(seen.size).toBe(LANGUAGES.length);
+    setLanguage("en");
   });
 
   it("switches language everywhere", async () => {

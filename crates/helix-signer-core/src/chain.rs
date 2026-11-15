@@ -6,7 +6,10 @@
 //!   the owner's authorization for the pinned delegate. The sender is the
 //!   authority and the transaction's own nonce is consumed before the
 //!   authorization list is processed, so the authorization nonce is the
-//!   account nonce **plus one**;
+//!   account nonce **plus one**. This holds for installs and for revoking a
+//!   dormant grant of an account whose delegation was cleared: its storage
+//!   persists, so the grant would act again after any later re-delegation;
+//!   the same transaction re-delegates and revokes;
 //! * already delegated to the pinned delegate: an ordinary EIP-1559 self-call;
 //! * delegated to anything else, or a contract: refused.
 //!
@@ -142,18 +145,20 @@ pub fn account_state(rpc: &Rpc, owner: &Address, constants: &Constants) -> Resul
     Ok(AccountState { kind, target, nonce, balance })
 }
 
-/// Why the account state forbids signing, or None.
-pub fn refuse_state(state: &AccountState, install: bool) -> Option<String> {
+/// Why the account state forbids signing, or None. Installs and revocations
+/// follow the same rule (``_install`` is kept for callers): a plain account is
+/// delegated by the transaction itself, a foreign delegation or a contract is
+/// refused.
+pub fn refuse_state(state: &AccountState, _install: bool) -> Option<String> {
     match state.kind {
         AccountKind::Other => Some(format!(
             "This account is already delegated (EIP-7702) to another contract, {}. The signer never overwrites someone else's delegation: that contract may hold your wallet's settings or funds logic. Remove that delegation with the wallet that set it, or use a different (dedicated) account.",
             state.target
         )),
         AccountKind::Contract => Some("This address is a contract, not an externally owned account.".into()),
-        AccountKind::Plain if !install => Some(
-            "This account is not delegated to the Helix implementation, so it has no hosted-bot grant to revoke.".into(),
-        ),
-        _ => None,
+        // A plain account may still store a dormant grant (its storage outlives the
+        // delegation): a revocation re-delegates it in the same type-4 transaction.
+        AccountKind::Plain | AccountKind::Pinned => None,
     }
 }
 
@@ -322,6 +327,69 @@ pub fn read_grant_key(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKin
     let raw = py_str(&rpc.call("eth_call", json!([{"to": owner.to_checksum(), "data": data}, "latest"]))?);
     let bytes = hex::decode(raw.get(2..).unwrap_or_default()).map_err(|_| Error::network(format!("Cannot decode {getter}.")))?;
     crate::abi::decode_getter_key(&bytes, kind == GrantKind::Session).map_err(|_| Error::network(format!("Cannot decode {getter}.")))
+}
+
+/// Helix7702Account storage layout (``forge inspect Helix7702Account
+/// storageLayout``): base slot of ``grants`` and ``policyGrants``. The
+/// session key is the low 20 bytes of the first word of each struct.
+pub fn grant_mapping_slot(kind: GrantKind) -> u64 {
+    match kind {
+        GrantKind::Session => 0,
+        GrantKind::Policy => 2,
+    }
+}
+
+/// Storage slot of ``mapping(bytes32 => ...)[grant_id]`` at a base slot.
+pub fn mapping_slot(grant_id: &str, base: u64) -> Result<[u8; 32]> {
+    let mut preimage = hex::decode(grant_id.get(2..).unwrap_or_default())
+        .ok()
+        .filter(|bytes| bytes.len() == 32)
+        .ok_or_else(|| Error::plan(format!("Grant ID {grant_id} is not 32 bytes of hex.")))?;
+    preimage.extend_from_slice(&U256::from(base).to_be_bytes::<32>());
+    Ok(keccak(&preimage))
+}
+
+/// Read a grant's session key straight from the account's storage, for an
+/// account that is not delegated to the pinned implementation (an
+/// ``eth_call`` would not run the Helix getters there).
+pub fn read_stored_grant_key(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKind) -> Result<Address> {
+    let slot = mapping_slot(grant_id, grant_mapping_slot(kind))?;
+    let raw = py_str(&rpc.call("eth_getStorageAt", json!([owner.to_checksum(), hex0x(&slot), "latest"]))?);
+    let word = quantity(&json!(if raw == "0x" { "0x0".to_string() } else { raw }))?.to_be_bytes::<32>();
+    Ok(Address(word[12..].try_into().expect("20 bytes")))
+}
+
+/// The stored session key of a grant, however the account is delegated now.
+pub fn grant_key(rpc: &Rpc, state: &AccountState, owner: &Address, grant_id: &str, kind: GrantKind) -> Result<Address> {
+    match state.kind {
+        AccountKind::Pinned => read_grant_key(rpc, owner, grant_id, kind),
+        _ => read_stored_grant_key(rpc, owner, grant_id, kind),
+    }
+}
+
+/// Whether a grant ID is stored as a policy or session grant, read the way
+/// ``grant_key`` reads (storage for an account not delegated to Helix).
+pub fn detect_stored_grant_kind(rpc: &Rpc, state: &AccountState, owner: &Address, grant_id: &str) -> Result<Option<GrantKind>> {
+    for kind in [GrantKind::Policy, GrantKind::Session] {
+        if !grant_key(rpc, state, owner, grant_id, kind)?.is_zero() {
+            return Ok(Some(kind));
+        }
+    }
+    Ok(None)
+}
+
+/// After a revocation: the account is delegated to the pinned implementation
+/// (a revocation of a dormant grant re-delegated it) and the key is cleared.
+pub fn verify_revoke(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKind, constants: &Constants) -> Result<()> {
+    let code = py_str(&rpc.call("eth_getCode", json!([owner.to_checksum(), "latest"]))?).to_lowercase();
+    if code != format!("{DELEGATION_PREFIX}{}", &constants.implementation.to_lower()[2..]) {
+        let shown: String = code.chars().take(60).collect();
+        return Err(Error::chain(format!("After the transaction the account code is {shown}, not the Helix delegation.")));
+    }
+    if !read_grant_key(rpc, owner, grant_id, kind)?.is_zero() {
+        return Err(Error::chain("The grant still has a session key after the transaction."));
+    }
+    Ok(())
 }
 
 /// Check the delegation, the install event and the stored grant.

@@ -225,6 +225,8 @@ fn listing_view(listing: &core::Listing) -> ListingView {
                 remaining_calls: row.remaining_calls,
                 revocable: row.revocable,
                 active: row.active(),
+                delegation: row.delegation.clone(),
+                not_revocable_reason: row.not_revocable_reason.clone(),
             })
             .collect(),
         scan_complete: listing.scan_complete,

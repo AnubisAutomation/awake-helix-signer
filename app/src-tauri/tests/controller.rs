@@ -50,6 +50,8 @@ struct Mock {
     fail_revoke_at: Mutex<Option<usize>>,
     /// Set while the second revocation runs: the test cancels then.
     on_revoke: Mutex<Option<Hook>>,
+    /// Rows listed after the three default ones.
+    extra: Mutex<Vec<GrantRowView>>,
 }
 
 impl Mock {
@@ -75,10 +77,14 @@ impl Mock {
             remaining_calls: Some(3),
             revocable: !revoked.iter().any(|item| item == id),
             active: !revoked.iter().any(|item| item == id) && status == "active",
+            delegation: "helix".into(),
+            not_revocable_reason: String::new(),
         };
+        let mut rows = vec![row("0xa1", "active"), row("0xb2", "active"), row("0xc3", "expired")];
+        rows.extend(self.extra.lock().unwrap().iter().cloned());
         ListingView {
             owner: OWNER.to_lowercase(),
-            rows: vec![row("0xa1", "active"), row("0xb2", "active"), row("0xc3", "expired")],
+            rows,
             scan_complete: true,
             scan_percent: 100,
             truncated: false,
@@ -217,7 +223,7 @@ impl Core for MockCore {
         Ok(RevokeDone { tx_hash: format!("0x{number}"), block: 200 + number as u64, stopped_bots: vec!["7".into()] })
     }
     fn ping(&self, link: &LinkInfo) -> Result<PingView, CommandError> {
-        Ok(PingView { version: "0.5.0".into(), os: "linux".into(), arch: "x86_64".into(), api: link.api.clone() })
+        Ok(PingView { version: "0.5.1".into(), os: "linux".into(), arch: "x86_64".into(), api: link.api.clone() })
     }
 }
 
@@ -347,7 +353,7 @@ fn links_set_the_website_and_ping_is_separate() {
     assert_eq!((view.action.as_str(), view.official), ("grants", true));
     assert!(controller.open_link("https://evil.example").is_err());
     let ping = controller.ping(&format!("awakehelix://ping?token={}", "P".repeat(32))).unwrap();
-    assert_eq!(ping.version, "0.5.0");
+    assert_eq!(ping.version, "0.5.1");
     assert!(controller.ping("awakehelix://grants").is_err());
 
     // Signed in to one website, a link to another drops that session.
@@ -386,6 +392,50 @@ fn grants_sign_in_once_list_and_revoke_one() {
     // The key stays for more work; nothing is pending any more.
     assert!(controller.key_status().is_some());
     assert!(controller.grants_confirm("REVOKE").is_err());
+}
+
+fn extra_row(id: &str, status: &str, revocable: bool, active: bool, reason: &str) -> GrantRowView {
+    GrantRowView {
+        grant_id: id.into(),
+        kind: "policy".into(),
+        status: status.into(),
+        key: "0xkey".into(),
+        key_origin: "hosted".into(),
+        bot: "no linked bot".into(),
+        valid_until: Some(1),
+        remaining_calls: Some(3),
+        revocable,
+        active,
+        delegation: if reason.is_empty() { "none".into() } else { "other".into() },
+        not_revocable_reason: reason.into(),
+    }
+}
+
+#[test]
+fn only_revocable_rows_can_be_revoked_and_revoke_all_includes_dormant_grants() {
+    let (controller, mock, _) = setup();
+    mock.extra.lock().unwrap().extend([
+        extra_row("0xd4", "inactive", true, true, ""),
+        extra_row("0xe5", "inactive", false, false, "otherDelegation"),
+        extra_row("0xf6", "unavailable", false, false, ""),
+        extra_row("0x07", "missing", false, false, ""),
+        extra_row("0x08", "some_future_status", false, false, ""),
+    ]);
+    controller.load_key(private_key("good")).unwrap();
+    let listing = controller.grants_load().unwrap();
+    assert_eq!(listing.rows.len(), 8);
+    assert_eq!(listing.rows[4].not_revocable_reason, "otherDelegation");
+    for id in ["0xe5", "0xf6", "0x07", "0x08"] {
+        let error = controller.grants_prepare(Some(vec![id.into()])).unwrap_err();
+        assert!(error.message.contains("is not a revocable grant"), "{id}: {}", error.message);
+    }
+    assert_eq!(mock.called("prepare-revoke"), 0);
+    // A dormant grant of an account without code can be chosen, and is in "revoke all".
+    assert_eq!(controller.grants_prepare(Some(vec!["0xd4".into()])).unwrap().count, 1);
+    controller.grants_cancel();
+    assert_eq!(controller.grants_prepare(None).unwrap().count, 3, "two active grants and the dormant one");
+    assert_eq!(mock.called("prepare-revoke 0xd4"), 2);
+    assert_eq!(mock.called("prepare-revoke 0xe5"), 0);
 }
 
 #[test]

@@ -306,12 +306,93 @@ fn revoke_with_a_plan_and_offline() {
     assert_eq!(hex::encode(&world.sent()[1].data), format!("{}{}", &c::revoke_selector(GrantKind::Session)[2..], "ef".repeat(32)));
     let error = flow::prepare_revoke(RPC, &constants(), offline, Some(&world.key), &transport, &quiet).unwrap_err();
     assert!(error.message().contains("is not active on chain"), "{error}");
-    // Not delegated: nothing to revoke.
+    // Not delegated and nothing stored: nothing to revoke.
     let plain = self::world();
     plain.serve(revoke_plan(&plain.owner, &grant, GrantKind::Policy));
     let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
     let error = flow::prepare_revoke(RPC, &constants(), source, Some(&plain.key), &plain.fake.transport(), &quiet).unwrap_err();
-    assert!(error.message().contains("not delegated"), "{error}");
+    assert!(error.message().contains("is not active on chain"), "{error}");
+    assert!(plain.sent().is_empty());
+}
+
+/// A plain (un-delegated) owner whose storage still holds a dormant grant.
+fn dormant(grant: &str) -> World {
+    let world = world();
+    world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.to_string(), session_key());
+    world.fake.state.lock().unwrap().nonces.insert(world.owner, 4);
+    world
+}
+
+#[test]
+fn dormant_grant_of_an_undelegated_account_is_revoked_with_one_type4_redelegation() {
+    let grant = format!("0x{}", "d0".repeat(32));
+    let world = dormant(&grant);
+    world.serve(revoke_plan(&world.owner, &grant, GrantKind::Policy));
+    let transport = world.fake.transport();
+    let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
+    let session = fast(flow::prepare_revoke(RPC, &constants(), source, Some(&world.key), &transport, &quiet).unwrap());
+    let text = session.summary_text();
+    assert!(text.contains("Transaction: ONE EIP-7702 type-4 transaction from the owner to itself: re-delegate the account to Helix and revokePolicyGrant(bytes32)"), "{text}");
+    assert!(text.contains("Delegation:  none now. The grant is inactive but still stored"), "{text}");
+    assert!(session.summary.revoke.as_ref().unwrap().redelegates);
+    let lines = std::cell::RefCell::new(Vec::<String>::new());
+    let outcome = flow::execute_revoke(&session, world.key.clone(), &|line| lines.borrow_mut().push(line.to_string())).unwrap();
+    let lines = lines.into_inner();
+    assert_eq!(outcome.tx_type, 4);
+    let sent = world.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].tx_type, sent[0].nonce, sent[0].to), (4, 4, world.owner));
+    // The authority is the owner, for the pinned implementation, at nonce + 1.
+    assert_eq!(sent[0].authorities, vec![(world.owner, 5, Address::constant(c::IMPLEMENTATION))]);
+    assert_eq!(hex::encode(&sent[0].data), format!("{}{}", &c::revoke_selector(GrantKind::Policy)[2..], "d0".repeat(32)));
+    // Verified after: delegated to Helix again and the key cleared.
+    let state = world.fake.state.lock().unwrap();
+    assert!(!state.policy[&world.owner].contains_key(&grant));
+    assert_eq!(&state.code[&world.owner][..3], &[0xef, 0x01, 0x00]);
+    drop(state);
+    assert!(lines.iter().any(|line| line.contains("delegated to Helix again and the grant is revoked")), "{lines:?}");
+    assert!(outcome.reported);
+}
+
+#[test]
+fn dormant_revoke_is_verified_on_chain_after_the_transaction() {
+    let grant = format!("0x{}", "d1".repeat(32));
+    let world = dormant(&grant);
+    world.fake.state.lock().unwrap().ignore_authorizations = true;
+    let offline = RevokeSource::Offline { owner: world.owner.to_checksum(), grant_id: grant.clone(), kind: None };
+    let session = fast(flow::prepare_revoke(RPC, &constants(), offline, Some(&world.key), &world.fake.transport(), &quiet).unwrap());
+    // The node dropped the authorization, so nothing ran: the signer says so.
+    let error = flow::execute_revoke(&session, world.key.clone(), &quiet).unwrap_err();
+    assert!(error.message().contains("not the Helix delegation"), "{error}");
+    assert!(error.message().contains("(transaction 0x"), "{error}");
+    assert_eq!(world.sent()[0].tx_type, 4);
+}
+
+#[test]
+fn grants_view_revokes_a_dormant_grant_and_refuses_a_foreign_delegation() {
+    let grant = format!("0x{}", "d2".repeat(32));
+    let world = dormant(&grant);
+    let transport = world.fake.transport();
+    let site = Website::new(API, transport.website.clone()).unwrap();
+    site.login(&world.key, &quiet).unwrap();
+    let session = fast(flow::prepare_grant_revoke(&site, &grant, RPC, &constants(), &world.key, &transport, &quiet).unwrap().unwrap());
+    let outcome = flow::execute_grant_revoke(&session, &world.key, &site, &quiet).unwrap();
+    assert_eq!(outcome.tx_type, 4);
+    assert_eq!(world.fake.state.lock().unwrap().confirmations, vec![(grant.clone(), outcome.tx_hash.clone())]);
+    // Delegated to another contract: the website refuses and the signer explains.
+    let foreign = format!("0x{}", "d3".repeat(32));
+    let other = dormant(&foreign);
+    other.fake.delegate(&other.owner, "0x9999999999999999999999999999999999999999");
+    let transport = other.fake.transport();
+    let site = Website::new(API, transport.website.clone()).unwrap();
+    site.login(&other.key, &quiet).unwrap();
+    let error = flow::prepare_grant_revoke(&site, &foreign, RPC, &constants(), &other.key, &transport, &quiet).unwrap_err();
+    assert!(error.message().contains("cannot be revoked here") && error.message().contains("never overwrites"), "{error}");
+    // A plan or an offline revoke is refused by the signer's own account check.
+    let offline = RevokeSource::Offline { owner: other.owner.to_checksum(), grant_id: foreign.clone(), kind: None };
+    let error = flow::prepare_revoke(RPC, &constants(), offline, Some(&other.key), &transport, &quiet).unwrap_err();
+    assert!(error.message().contains("already delegated (EIP-7702) to another contract"), "{error}");
+    assert!(other.sent().is_empty());
 }
 
 #[test]

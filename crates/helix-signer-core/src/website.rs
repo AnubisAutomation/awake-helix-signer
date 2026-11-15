@@ -25,7 +25,30 @@ use crate::pyfmt::py_str;
 use crate::summary::when;
 
 const COOKIES: [&str; 2] = ["sessionid", "csrftoken"];
-const ACTIVE_STATUSES: [&str; 2] = ["active", "not_yet_valid"];
+/// Statuses "revoke all" includes (when revocable): usable now or later, or
+/// dormant (``inactive``: it acts again if the account re-delegates).
+const ACTIVE_STATUSES: [&str; 3] = ["active", "not_yet_valid", "inactive"];
+
+/// What a grant status means, for ``grants list``; an unknown (newer)
+/// status is shown as it is.
+pub fn status_text(status: &str, not_revocable_reason: &str) -> String {
+    let text = match status {
+        "active" => "active",
+        "not_yet_valid" => "not yet valid",
+        "inactive" => "inactive: this account is not delegated to Helix7702Account; it becomes active again if the account re-delegates",
+        "expired" => "expired",
+        "exhausted" => "calls used up",
+        "revoked" => "revoked",
+        "missing" => "not installed (never on chain)",
+        "unavailable" => "temporarily unreadable: the chain could not be read just now; run `grants list` again in a moment",
+        other => return other.replace('_', " "),
+    };
+    if not_revocable_reason == "otherDelegation" {
+        format!("{text} (delegated to another contract, so it cannot be revoked here)")
+    } else {
+        text.to_string()
+    }
+}
 const COOKIE_ATTRIBUTES: [&str; 9] = ["expires", "path", "comment", "domain", "max-age", "secure", "httponly", "version", "samesite"];
 
 fn hosts_match(left: &str, right: &str) -> bool {
@@ -84,8 +107,13 @@ pub struct GrantRow {
     pub valid_until: Option<i64>,
     /// Calls left.
     pub remaining_calls: Option<i64>,
-    /// Whether the grant still has storage on chain.
+    /// Whether this signer can revoke it (stored on chain, and the account is
+    /// not delegated to another contract).
     pub revocable: bool,
+    /// ``helix``, ``none`` or ``other``: the account's code when it was read.
+    pub delegation: String,
+    /// ``otherDelegation`` when a stored grant cannot be revoked here, else "".
+    pub not_revocable_reason: String,
 }
 
 impl GrantRow {
@@ -109,8 +137,17 @@ impl GrantRow {
 
     /// The lines ``grants list`` prints for this grant.
     pub fn describe(&self) -> String {
+        // The statuses whose name says it all keep their former two-word lines;
+        // the others (and a refusal) get a line explaining them.
+        let plain = ["active", "not_yet_valid", "expired", "exhausted", "revoked"].contains(&self.status.as_str());
+        let note = if plain && self.not_revocable_reason.is_empty() {
+            String::new()
+        } else {
+            format!("\n  status: {}", status_text(&self.status, &self.not_revocable_reason))
+        };
+        let refused = if self.not_revocable_reason.is_empty() { "" } else { "\n  revocable here: no" };
         format!(
-            "{}  {}\n  key: {} ({})\n  bot: {}\n  valid until: {}\n  remaining calls: {}",
+            "{}  {}{note}\n  key: {} ({})\n  bot: {}\n  valid until: {}\n  remaining calls: {}{refused}",
             self.grant_id,
             self.status,
             if self.key.is_empty() { "-" } else { &self.key },
@@ -206,6 +243,8 @@ pub fn parse_listing(raw: &Map<String, Value>, owner: &str) -> Result<Listing> {
             valid_until: optional_int(row.get("validUntilUnix")),
             remaining_calls: optional_int(row.get("remainingCalls")),
             revocable: row.get("revocable") == Some(&Value::Bool(true)),
+            delegation: text("delegation", ""),
+            not_revocable_reason: text("notRevocableReason", ""),
         });
     }
     let scan = raw.get("scan").and_then(Value::as_object).cloned().unwrap_or_default();
@@ -471,5 +510,42 @@ mod tests {
         assert!(!listing.scan_complete);
         assert_eq!(listing.scan_percent, 50);
         assert_eq!(listing.active().len(), 1);
+    }
+
+    #[test]
+    fn statuses_labels_and_revoke_all() {
+        let owner = "0x1111111111111111111111111111111111111111";
+        let row = |id: &str, status: &str, revocable: bool, reason: Value| {
+            json!({"grantId": id, "kind": "policy", "status": status, "revocable": revocable, "delegation": "none", "notRevocableReason": reason})
+        };
+        let listing = parse_listing(
+            json!({"owner": owner, "grants": [
+                row("0x01", "inactive", true, Value::Null),
+                row("0x02", "inactive", false, json!("otherDelegation")),
+                row("0x03", "unavailable", false, Value::Null),
+                row("0x04", "missing", false, Value::Null),
+                row("0x05", "frozen_by_dao", false, Value::Null),
+                row("0x06", "expired", true, Value::Null),
+            ]})
+            .as_object()
+            .unwrap(),
+            owner,
+        )
+        .unwrap();
+        // Revoke all: the dormant grant this signer can revoke, nothing else.
+        let all: Vec<&str> = listing.active().iter().map(|row| row.grant_id.as_str()).collect();
+        assert_eq!(all, ["0x01"]);
+        assert_eq!(listing.rows[0].delegation, "none");
+        assert_eq!(listing.rows[1].not_revocable_reason, "otherDelegation");
+        let text: Vec<String> = listing.rows.iter().map(GrantRow::describe).collect();
+        assert!(text[0].contains("status: inactive: this account is not delegated to Helix7702Account; it becomes active again if the account re-delegates"), "{}", text[0]);
+        assert!(!text[0].contains("revocable here"));
+        assert!(text[1].contains("delegated to another contract, so it cannot be revoked here"), "{}", text[1]);
+        assert!(text[1].contains("revocable here: no"));
+        assert!(text[2].contains("temporarily unreadable") && text[2].contains("run `grants list` again"), "{}", text[2]);
+        assert!(text[3].contains("not installed (never on chain)"));
+        assert!(text[4].contains("status: frozen by dao"), "{}", text[4]);
+        // Self-explaining statuses keep the former lines.
+        assert!(!text[5].contains("status:") && !text[5].contains("revocable here"), "{}", text[5]);
     }
 }

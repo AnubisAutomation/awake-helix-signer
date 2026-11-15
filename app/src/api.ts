@@ -60,6 +60,10 @@ export interface GrantRow {
   remainingCalls: number | null;
   revocable: boolean;
   active: boolean;
+  /** "helix", "none" or "other": the account's code when it was read. */
+  delegation: string;
+  /** "otherDelegation" when a stored grant cannot be revoked here, else "". */
+  notRevocableReason: string;
 }
 
 export interface Listing {

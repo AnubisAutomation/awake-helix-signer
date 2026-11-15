@@ -8,10 +8,28 @@ import { short } from "../links";
 import { grantsButtons } from "../machines";
 import { show, syncLog, utcAndLocal } from "./common";
 
-const STATUS_KEYS = new Set(["active", "not_yet_valid", "expired", "revoked", "exhausted", "unavailable", "missing"]);
+// Statuses the website sends; a newer one renders with a neutral label.
+export const STATUS_KEYS = new Set(["active", "not_yet_valid", "inactive", "expired", "revoked", "exhausted", "unavailable", "missing"]);
 
 export function statusText(status: string): string {
-  return STATUS_KEYS.has(status) ? t(`grants.status.${status}`) : status.replace(/_/g, " ");
+  if (STATUS_KEYS.has(status)) return t(`grants.status.${status}`);
+  const shown = status.replace(/[^\w -]/g, "").replace(/_/g, " ").trim().slice(0, 40);
+  return t("grants.status.unknown", { status: shown || "?" });
+}
+
+/** CSS class of a row's status: known statuses only, anything else is neutral. */
+export function statusClass(status: string): string {
+  return STATUS_KEYS.has(status) ? `status-${status}` : "status-other";
+}
+
+/** Explanations for the statuses shown (dormant, foreign delegation, read failure, never installed). */
+export function statusNotes(rows: readonly GrantRow[]): string[] {
+  const notes: string[] = [];
+  if (rows.some((row) => row.status === "inactive" && row.notRevocableReason !== "otherDelegation")) notes.push(t("grants.note.inactive"));
+  if (rows.some((row) => row.notRevocableReason === "otherDelegation")) notes.push(t("grants.note.otherDelegation"));
+  if (rows.some((row) => row.status === "unavailable")) notes.push(t("grants.note.unavailable"));
+  if (rows.some((row) => row.status === "missing")) notes.push(t("grants.note.missing"));
+  return notes;
 }
 
 export class GrantsView {
@@ -24,6 +42,7 @@ export class GrantsView {
   private table = h("div", { class: "grants", role: "table", "data-testid": "grants-table" });
   private listed: unknown = null;
   private empty = h("p", { class: "muted", "data-testid": "grants-empty" });
+  private notes = h("div", { class: "grants-notes", "data-testid": "grants-notes" });
   private wordLabel = h("span", { class: "field-label" });
   private word = h("input", { type: "text", autocomplete: "off", autocapitalize: "characters", spellcheck: false, class: "word", "data-testid": "grants-word" });
   private confirmButton = h("button", { type: "button", class: "danger", "data-testid": "grants-confirm" });
@@ -41,6 +60,7 @@ export class GrantsView {
       this.help,
       h("div", { class: "row wrap" }, this.loadButton, this.revokeButton, this.revokeAllButton, h("span", { class: "spacer" }), this.scan),
       this.table,
+      this.notes,
       this.empty,
       h("div", { class: "row wrap sign-row" }, h("label", { class: "field inline" }, this.wordLabel, this.word), this.confirmButton, this.cancelButton, h("span", { class: "spacer" }), this.progress),
       this.logTitle,
@@ -70,7 +90,7 @@ export class GrantsView {
       h("span", { class: `cell ${extra}`, role: "cell", "data-label": t(`grants.col.${column}`) }, value);
     return h(
       "label",
-      { class: `grant-row status-${row.status}`, role: "row", "data-testid": "grant-row", "data-grant": row.grantId },
+      { class: `grant-row ${statusClass(row.status)}`, role: "row", "data-testid": "grant-row", "data-grant": row.grantId, "data-revocable": String(row.revocable) },
       h("span", { class: "cell pick" }, select),
       cell("status", statusText(row.status), "status"),
       cell("key", short(row.key), "mono"),
@@ -117,7 +137,9 @@ export class GrantsView {
       this.listed = listing;
       this.table.dataset.language = document.documentElement.lang;
       this.table.replaceChildren(...(listing && listing.rows.length ? [this.header(), ...listing.rows.map((row) => this.row(row))] : []));
+      this.notes.replaceChildren(...statusNotes(listing?.rows ?? []).map((text) => h("p", { class: "muted small grants-note" }, text)));
     }
+    show(this.notes, this.notes.childElementCount > 0);
     this.table.querySelectorAll<HTMLInputElement>("input[type=radio]").forEach((input) => {
       input.checked = input.value === state.selected;
       input.disabled = state.phase !== "listed";

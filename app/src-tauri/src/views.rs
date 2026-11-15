@@ -150,6 +150,8 @@ pub struct GrantRowView {
     pub remaining_calls: Option<i64>,
     pub revocable: bool,
     pub active: bool,
+    pub delegation: String,
+    pub not_revocable_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

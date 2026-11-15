@@ -211,6 +211,9 @@ class Website:
         table = self.chain.policy if found["kind"] == "policy" else self.chain.session
         if grant_id not in table.get(owner, {}):
             raise _gone(url, 409, "已撤銷", status="revoked")
+        code = self.chain.code.get(owner, b"")
+        if code and code != bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower()):
+            raise _gone(url, 409, "委派給其他合約", status="inactive", reason="otherDelegation")
         call = {
             "to": owner, "data": c.REVOKE_SELECTORS[found["kind"]] + grant_id[2:], "value": "0x0", "chainId": 6714,
             "grantId": grant_id, "kind": found["kind"], "status": found["status"], "gasFeePercent": "0",

@@ -34,6 +34,8 @@ pub type Log<'a> = &'a dyn Fn(&str);
 pub const AUTHORIZE: &str = "AUTHORIZE";
 /// Word the owner types to sign a revocation.
 pub const REVOKE: &str = "REVOKE";
+/// Why a grant under a foreign EIP-7702 delegation is not revoked here.
+pub const FOREIGN_DELEGATION: &str = "this account is delegated (EIP-7702) to another contract, and the signer never overwrites someone else's delegation. The grant is inactive while that delegation stays; remove that delegation with the wallet that set it, then revoke the grant here.";
 
 /// A verified plan.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -395,7 +397,7 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
         chain::check_chain(&rpc, constants)?;
         require_owner(material, &plan.owner)?;
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
-        let live = chain::detect_grant_kind(&rpc, &plan.owner, &plan.grant_id)?;
+        let live = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)?;
         let Some(live) = live else {
             return Err(Error::flow(format!(
                 "Grant {} is not active on chain (already revoked or never installed); nothing to sign. The dashboard detects a revocation on chain by itself.",
@@ -435,14 +437,18 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
         require_owner(Some(&material), &owner)?;
         let state = checked_state(rpc, &owner, constants, install)?;
         let (max_fee, tip) = chain::fees(rpc)?;
-        let mut authorization = None;
+        // A plain account is delegated by this transaction: for an install, and
+        // for revoking a dormant grant left in its storage (re-delegation).
+        let authorization = if state.kind == AccountKind::Plain {
+            Some(chain::sign_authorization(&material, constants, state.nonce)?)
+        } else {
+            None
+        };
         let fallback = match &current.plan {
             VerifiedPlan::Grant(plan) if install => {
-                if state.kind == AccountKind::Plain {
-                    authorization = Some(chain::sign_authorization(&material, constants, state.nonce)?);
-                }
                 chain::FALLBACK_GAS_BASE + chain::FALLBACK_GAS_PER_RULE * plan.rules.len() as u64
             }
+            _ if authorization.is_some() => chain::REVOKE_FALLBACK_GAS + chain::AUTHORIZATION_GAS,
             _ => chain::REVOKE_FALLBACK_GAS,
         };
         let (gas, how) = chain::estimate_gas(rpc, &owner, current.plan.data(), authorization.as_ref(), fallback)?;
@@ -535,11 +541,14 @@ pub fn execute_sign(current: &Session, material: KeyMaterial, log: Log) -> Resul
 pub fn execute_revoke(current: &Session, material: KeyMaterial, log: Log) -> Result<Outcome> {
     let VerifiedPlan::Revoke(plan) = &current.plan else { return Err(Error::flow("This session is not a revocation.")) };
     let sent = send(current, material, log, false)?;
-    let still = chain::read_grant_key(&current.rpc, &plan.owner, &plan.grant_id, plan.grant_kind)
-        .and_then(|key| if key.is_zero() { Ok(()) } else { Err(Error::chain("The grant still has a session key after the transaction.")) });
-    still.map_err(|error| wrapped(error, "", &format!(" (transaction {})", sent.tx_hash)))?;
+    chain::verify_revoke(&current.rpc, &plan.owner, &plan.grant_id, plan.grant_kind, &current.constants)
+        .map_err(|error| wrapped(error, "", &format!(" (transaction {})", sent.tx_hash)))?;
     let block = receipt_number(&sent.receipt, "blockNumber");
-    log(&format!("Confirmed in block {block}: the grant is revoked on chain."));
+    if sent.tx_type == 4 {
+        log(&format!("Confirmed in block {block}: the account is delegated to Helix again and the grant is revoked on chain."));
+    } else {
+        log(&format!("Confirmed in block {block}: the grant is revoked on chain."));
+    }
     let (reported, report_message) = report(current, &sent.tx_hash, log);
     Ok(Outcome {
         tx_hash: sent.tx_hash,
@@ -581,6 +590,12 @@ pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, const
     let rpc = Rpc::new(rpc_url, transport.rpc.clone()).map_err(as_flow)?;
     let call = match site.revoke_call(grant_id) {
         Ok(call) => call,
+        Err(error) if error.status() == Some(409) && error.body().get("reason").and_then(Value::as_str) == Some("otherDelegation") => {
+            return Err(Error::flow(format!(
+                "Grant {grant_id} cannot be revoked here: {}",
+                FOREIGN_DELEGATION
+            )))
+        }
         Err(error) if error.status() == Some(409) => {
             log(&format!("Grant {grant_id} is already revoked or not on chain."));
             return Ok(None);
@@ -594,7 +609,7 @@ pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, const
         let plan = revoke_call_plan(&Value::Object(call), &material.address(), grant_id, constants)?;
         chain::check_chain(&rpc, constants)?;
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
-        let Some(live) = chain::detect_grant_kind(&rpc, &plan.owner, &plan.grant_id)? else {
+        let Some(live) = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)? else {
             log(&format!("Grant {grant_id} is not active on chain; nothing to sign."));
             return Ok(None);
         };

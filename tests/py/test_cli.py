@@ -368,11 +368,39 @@ class RevokeTests(CliCase):
         self.assertEqual(result.code, 2, result)
         self.assertIn("not active on chain", result.stdout)
 
-    def test_revoke_requires_helix_delegation(self) -> None:
+    def test_revoke_of_an_undelegated_account_without_the_grant(self) -> None:
         self.site.plans[fakes.TOKEN] = fakes.revoke_plan(self.owner, "0x" + "cd" * 32)
         result = self.cli(["revoke", "--plan", fakes.TOKEN, *self.world.api, *self.world.network, *self.keystore()], [self.world.password])
         self.assertEqual(result.code, 2, result)
-        self.assertIn("not delegated", result.stdout)
+        self.assertIn("is not active on chain", result.stdout)
+        self.assertEqual(self.chain.sent, [])
+
+    def test_revoke_of_a_dormant_grant_redelegates_in_the_same_type4(self) -> None:
+        owner, grant = self.owner.lower(), "0x" + "d0" * 32
+        # Delegation cleared earlier; the grant is still in the account's storage.
+        self.chain.policy[owner] = {grant: fakes.SESSION_KEY.lower()}
+        self.chain.nonces[owner] = 6
+        self.site.plans[fakes.TOKEN] = fakes.revoke_plan(self.owner, grant)
+        result = self.cli(["revoke", "--plan", fakes.TOKEN, *self.world.api, *self.world.network, *self.keystore()], [self.world.password, "REVOKE"])
+        self.assertEqual(result.code, 0, result)
+        self.assertIn("re-delegate the account to Helix and revokePolicyGrant(bytes32)", result.stdout)
+        self.assertIn("Delegation:  none now. The grant is inactive but still stored", result.stdout)
+        sent = self.chain.sent[-1]
+        self.assertEqual((sent["type"], sent["tx"]["nonce"]), (4, 6))
+        self.assertEqual(sent["authorities"], [{"authority": owner, "nonce": 7, "address": c.IMPLEMENTATION.lower()}])
+        self.assertNotIn(grant, self.chain.policy[owner])
+        self.assertEqual(self.chain.code[owner], bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower()))
+        self.assertIn("delegated to Helix again and the grant is revoked", result.stdout)
+
+    def test_revoke_refuses_a_foreign_delegation(self) -> None:
+        owner, grant = self.owner.lower(), "0x" + "d1" * 32
+        self.chain.policy[owner] = {grant: fakes.SESSION_KEY.lower()}
+        self.chain.delegate(owner, "0x" + "99" * 20)
+        self.site.plans[fakes.TOKEN] = fakes.revoke_plan(self.owner, grant)
+        result = self.cli(["revoke", "--plan", fakes.TOKEN, *self.world.api, *self.world.network, *self.keystore()], [self.world.password])
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("already delegated (EIP-7702) to another contract", result.stdout)
+        self.assertEqual(self.chain.sent, [])
 
     def test_kind_mismatch_and_missing_arguments(self) -> None:
         self.chain.delegate(self.owner)
@@ -420,6 +448,30 @@ class GrantsTests(CliCase):
         self.assertEqual(self.backend.requests[:4], [("GET", "/api/csrf"), ("POST", "/api/auth/challenge"), ("POST", "/api/auth/verify"), ("GET", "/api/grants")])
         self.assertEqual(self.chain.sent, [])
         self.assertEqual(self.backend.logged_out, 1)
+
+    def test_list_explains_new_statuses(self) -> None:
+        owner = self.owner.lower()
+        rows = self.backend.grants[owner]
+        rows[0] = {**fake_website.row(owner, GRANT_A, status="inactive"), "revocable": True, "delegation": "none"}
+        rows[1] = {**fake_website.row(owner, GRANT_B, status="inactive"), "revocable": False, "delegation": "other", "notRevocableReason": "otherDelegation"}
+        rows[2] = {**fake_website.row(owner, GRANT_C, status="unavailable"), "revocable": False}
+        rows.append({**fake_website.row(owner, "0x" + "c4" * 32, status="missing"), "revocable": False})
+        rows.append({**fake_website.row(owner, "0x" + "c5" * 32, status="paused_by_future_release"), "revocable": False})
+        result = self.grants(["list"])
+        self.assertEqual(result.code, 0, result)
+        for fragment in ("inactive: this account is not delegated to Helix7702Account; it becomes active again if the account re-delegates",
+                         "delegated to another contract, so it cannot be revoked here", "temporarily unreadable",
+                         "run `grants list` again", "not installed (never on chain)", "paused by future release",
+                         "revocable here: no"):
+            self.assertIn(fragment, result.stdout)
+
+    def test_revoke_grant_of_a_foreign_delegation_is_explained(self) -> None:
+        self.chain.delegate(self.owner.lower(), "0x" + "99" * 20)
+        result = self.grants(["revoke", "--grant", GRANT_A], ["REVOKE"])
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("cannot be revoked here", result.stdout)
+        self.assertIn("never overwrites", result.stdout)
+        self.assertEqual(self.chain.sent, [])
 
     def test_revoke_one(self) -> None:
         result = self.grants(["revoke", "--grant", GRANT_B], ["REVOKE"])
@@ -498,10 +550,10 @@ class PingTests(CliCase):
         token, body = self.world.fake.pings[0]
         self.assertEqual(token, self.TOKEN)
         self.assertEqual(set(body), {"version", "os", "arch"})
-        self.assertEqual(body["version"], "0.5.0")
+        self.assertEqual(body["version"], "0.5.1")
         method, _, headers, _ = self.world.fake.log[-1]
         self.assertEqual(method, "POST")
-        self.assertEqual(headers.get("User-Agent"), "awake-helix-signer/0.5.0")
+        self.assertEqual(headers.get("User-Agent"), "awake-helix-signer/0.5.1")
         self.assertEqual(headers.get("Content-Type"), "application/json")
         for status, fragment in ((404, "does not know"), (409, "already confirmed"), (410, "expired"), (429, "Too many"), (500, "refused")):
             self.world.fake.ping_status = status
@@ -555,7 +607,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(signed.code, 0, signed)
 
     def test_version_help_status(self) -> None:
-        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), "awake-helix-signer 0.5.0")
+        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), "awake-helix-signer 0.5.1")
         self.assertEqual(harness.run(BIN, ["--version", "sign"]).code, 0)
         help_text = harness.run(BIN, ["--help"])
         self.assertEqual(help_text.code, 0)
@@ -564,7 +616,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(harness.run(BIN, []).code, 2)
         status = harness.run(BIN, ["status"])
         self.assertEqual(status.code, 0, status)
-        self.assertIn("awake-helix-signer 0.5.0", status.stdout)
+        self.assertIn("awake-helix-signer 0.5.1", status.stdout)
         self.assertIn("awakehelix:// handler:", status.stdout)
         self.assertEqual(harness.run(BIN, ["--selftest"]).code, 0)
 
@@ -660,7 +712,7 @@ class CompanionTests(CliCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], SITE)
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual((body["name"], body["paired"], body["chainId"], body["version"], body["keyLoaded"], body["owner"]),
-                         ("awake-helix-signer", False, 6714, "0.5.0", True, self.owner))
+                         ("awake-helix-signer", False, 6714, "0.5.1", True, self.owner))
         self.assertTrue(body["constantsHash"].startswith("0x"))
         for origin in ("https://evil.example", "https://anubis.sivilization.com.evil.example", "null", None):
             status, headers, _ = self.request("GET", "/health", origin=origin)

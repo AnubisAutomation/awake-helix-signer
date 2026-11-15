@@ -228,8 +228,13 @@ pub struct RevokeSummary {
     pub grant_id: String,
     /// ``policy`` or ``session``.
     pub grant_kind: GrantKind,
-    /// Current delegation target (stays in place).
+    /// Current delegation target (stays in place), "" for a plain account.
     pub delegation: String,
+    /// True when the account has no code: the same type-4 transaction
+    /// re-delegates it to the pinned implementation, then revokes.
+    pub redelegates: bool,
+    /// The pinned implementation it is delegated to.
+    pub delegate: Address,
 }
 
 /// Everything the owner confirms.
@@ -322,7 +327,14 @@ impl Summary {
         }
         if let Some(revoke) = &self.revoke {
             lines.push(format!("Grant ID:    {} ({} grant)", revoke.grant_id, revoke.grant_kind.as_str()));
-            lines.push(format!("Delegation:  {} (stays in place; only the grant is revoked)", revoke.delegation));
+            if revoke.redelegates {
+                lines.push(format!(
+                    "Delegation:  none now. The grant is inactive but still stored, and would act again after any re-delegation; this transaction re-delegates the account to {} and revokes it (the delegation stays afterwards)",
+                    named(&revoke.delegate)
+                ));
+            } else {
+                lines.push(format!("Delegation:  {} (stays in place; only the grant is revoked)", revoke.delegation));
+            }
             lines.push("Value:       0 (no native value is sent)".into());
             lines.push(format!("Gas:         paid in {} by the owner; balance {}", c::GAS_SYMBOL, self.balance));
             lines.push("After this the session key can no longer act for this grant.".into());
@@ -396,12 +408,19 @@ pub fn grant_summary(plan: &GrantPlan, state: &AccountState, api: Option<&str>, 
 pub fn revoke_summary(plan: &RevokePlan, state: &AccountState, api: Option<&str>, rpc_url: &str, constants: &Constants) -> Summary {
     let mut summary = base(PlanKind::Revoke, plan.owner, state, api, rpc_url, constants);
     let method = plan.grant_kind.revoke_signature();
-    summary.transaction = format!("ordinary self-call {method}");
+    let redelegates = state.kind == AccountKind::Plain;
+    summary.transaction = if redelegates {
+        format!("ONE EIP-7702 type-4 transaction from the owner to itself: re-delegate the account to Helix and {method}")
+    } else {
+        format!("ordinary self-call {method}")
+    };
     summary.revoke = Some(RevokeSummary {
         method: method.to_string(),
         grant_id: plan.grant_id.clone(),
         grant_kind: plan.grant_kind,
         delegation: state.target.clone(),
+        redelegates,
+        delegate: constants.implementation,
     });
     summary
 }

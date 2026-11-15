@@ -23,7 +23,7 @@ const listing = (rows: Partial<Listing["rows"][number]>[], scanComplete = true):
   truncated: false,
   rows: rows.map((row, index) => ({
     grantId: `0x${index}`, kind: "policy", status: "active", key: "0xkey", keyOrigin: "hosted", bot: "bot",
-    validUntil: 1, remainingCalls: 1, revocable: true, active: true, ...row,
+    validUntil: 1, remainingCalls: 1, revocable: true, active: true, delegation: "helix", notRevocableReason: "", ...row,
   })),
 });
 
@@ -105,6 +105,25 @@ function grants(events: Parameters<typeof grantsReducer>[1][], start: GrantsStat
 
 describe("grants machine", () => {
   const list = listing([{ status: "active" }, { status: "expired", active: false }, { status: "revoked", revocable: false, active: false }]);
+
+  it("offers Revoke only for revocable rows, whatever the status says", () => {
+    const rows = listing([
+      { status: "inactive", revocable: false, active: false, delegation: "other", notRevocableReason: "otherDelegation" },
+      { status: "unavailable", revocable: false, active: false },
+      { status: "missing", revocable: false, active: false },
+      { status: "a_future_status", revocable: false, active: false },
+      { status: "inactive", revocable: true, active: true, delegation: "none" },
+    ]);
+    let state = grantsReducer(grants([{ type: "load" }]), { type: "listed", listing: rows });
+    for (const grantId of ["0x0", "0x1", "0x2", "0x3"]) {
+      state = grantsReducer(state, { type: "select", grantId });
+      expect(grantsButtons(state).revokeSelected, grantId).toBe(false);
+    }
+    state = grantsReducer(state, { type: "select", grantId: "0x4" });
+    expect(grantsButtons(state)).toMatchObject({ revokeSelected: true, revokeAll: true });
+    const none = grantsReducer(grants([{ type: "load" }]), { type: "listed", listing: listing([{ status: "inactive", revocable: false, active: false }]) });
+    expect(grantsButtons(none).revokeAll).toBe(false);
+  });
 
   it("loads, selects and revokes one grant", () => {
     let state = grants([{ type: "load" }]);

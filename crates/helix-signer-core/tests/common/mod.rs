@@ -236,6 +236,8 @@ pub struct State {
     pub logged_out: usize,
     pub requests: Vec<(String, String)>,
     pub login_domain: String,
+    /// The chain drops every EIP-7702 authorization (to test the checks after a revocation).
+    pub ignore_authorizations: bool,
 }
 
 #[derive(Clone)]
@@ -302,8 +304,28 @@ impl Fake {
                 Ok(json!(quantity(300_000)))
             }
             "eth_getTransactionReceipt" => Ok(state.receipts.get(&params[0].as_str().unwrap_or_default().to_lowercase()).cloned().unwrap_or(Value::Null)),
+            "eth_getStorageAt" => {
+                // Helix7702Account layout: grants at slot 0, policyGrants at slot 2.
+                let owner = address(0);
+                let slot = params[1].as_str().unwrap_or_default().to_lowercase();
+                for (table, base) in [(&state.policy, GrantKind::Policy), (&state.session, GrantKind::Session)] {
+                    for (grant, key) in table.get(&owner).into_iter().flatten() {
+                        let expected = helix_signer_core::chain::mapping_slot(grant, helix_signer_core::chain::grant_mapping_slot(base)).unwrap();
+                        if hex0x(&expected) == slot {
+                            return Ok(json!(hex0x(&key.word())));
+                        }
+                    }
+                }
+                Ok(json!(format!("0x{}", "0".repeat(64))))
+            }
             "eth_call" => {
                 let owner = Address::parse(params[0]["to"].as_str().unwrap_or_default()).unwrap_or_default();
+                let mut pinned = hex::decode("ef0100").unwrap();
+                pinned.extend_from_slice(&Address::constant(c::IMPLEMENTATION).0);
+                if state.code.get(&owner) != Some(&pinned) {
+                    // No Helix code runs at an account that is not delegated to it.
+                    return Ok(json!("0x"));
+                }
                 let data = params[0]["data"].as_str().unwrap_or_default().to_lowercase();
                 let grant = format!("0x{}", &data[10..]);
                 let (table, words) = if data.starts_with(&c::selector(c::POLICY_GETTER)) { (&state.policy, 5) } else { (&state.session, 6) };
@@ -359,7 +381,7 @@ fn execute(state: &mut State, raw: Vec<u8>) -> Result<Value, String> {
             let authority = secp::recover(&digest, &word(&entry[4]), &word(&entry[5]), entry[3].uint().to::<u8>()).unwrap();
             authorities.push((authority, auth_nonce, target));
             // EIP-7702: valid only at the authority's current nonce (the sender's is already bumped).
-            if (auth_chain == 0 || auth_chain == state.chain_id) && auth_nonce == *state.nonces.get(&authority).unwrap_or(&0) {
+            if !state.ignore_authorizations && (auth_chain == 0 || auth_chain == state.chain_id) && auth_nonce == *state.nonces.get(&authority).unwrap_or(&0) {
                 let mut code = hex::decode("ef0100").unwrap();
                 code.extend_from_slice(&target.0);
                 state.code.insert(authority, code);
@@ -486,6 +508,12 @@ impl Fake {
             if parts[3] == "revoke-call" {
                 if !state.policy.get(&owner_address).map(|grants| grants.contains_key(&grant)).unwrap_or(false) {
                     return status(409, json!({"error": "revoked"}));
+                }
+                let mut pinned = hex::decode("ef0100").unwrap();
+                pinned.extend_from_slice(&Address::constant(c::IMPLEMENTATION).0);
+                if state.code.get(&owner_address).map(|code| !code.is_empty() && *code != pinned).unwrap_or(false) {
+                    // Like the website: a grant under a foreign delegation is not revocable.
+                    return status(409, json!({"error": "foreign delegation", "status": "inactive", "reason": "otherDelegation"}));
                 }
                 return ok(json!({"to": owner, "data": format!("{}{}", c::revoke_selector(GrantKind::Policy), &grant[2..]), "value": "0x0", "chainId": 6714, "grantId": grant, "kind": "policy"}));
             }
