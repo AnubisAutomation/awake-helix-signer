@@ -134,7 +134,7 @@ textarea.secret { -webkit-text-security: disc; resize: vertical; }
 .key-loaded { flex-wrap: wrap; }
 .key-loaded .mono { font-size: 0.9rem; }
 .key-loaded button, .row button { white-space: nowrap; }
-.grant-row .mono { font-size: 0.8rem; }
+.grant-row .mono { font-size: 0.8rem; white-space: nowrap; }
 
 .tabs { display: flex; gap: 4px; margin: 10px 0 0; overflow-x: auto; }
 .tab { background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; }
@@ -162,7 +162,7 @@ main .page { border-top-left-radius: 0; }
 .raw { display: block; opacity: 0.8; font-size: 0.92em; margin-top: 2px; }
 .status .raw, .error-text .raw { display: block; }
 .site { display: flex; flex-wrap: wrap; column-gap: 1.5em; }
-.field-help { display: block; max-width: 28em; font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
+.field-help { display: block; max-width: 24em; font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
 .sign-row { margin-top: 10px; }
 .result { color: var(--ok); font-weight: 600; word-break: break-all; }
 .status { margin: 10px 2px; min-height: 1.4em; white-space: pre-wrap; word-break: break-word; }
@@ -170,6 +170,9 @@ main .page { border-top-left-radius: 0; }
 .status.ok { color: var(--ok); }
 
 .editor-top .field { flex: 0 1 auto; }
+/* Inputs stay on one line when the calls field carries its help under it. */
+.editor-top { align-items: flex-start; }
+.editor-top > button { margin-top: calc(0.85rem * 1.5 + 3px); }
 .rules { display: grid; gap: 4px; margin-top: 6px; }
 .rules-head, .rules-row { display: grid; grid-template-columns: minmax(10em, 1fr) minmax(9em, 14em) minmax(9em, 14em); gap: 8px; align-items: center; }
 .cap { display: flex; flex-direction: column; gap: 2px; }
@@ -177,7 +180,7 @@ main .page { border-top-left-radius: 0; }
 .grants { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 8px 0; }
 .grant-row {
   display: grid;
-  grid-template-columns: 2em 7em 8em minmax(6.5em, 1fr) 11em 11em 7em 8em;
+  grid-template-columns: 2em 7em 8em minmax(6.5em, 1fr) 12em 12em 7em 8em;
   gap: 6px;
   padding: 6px 8px;
   border-top: 1px solid var(--line);

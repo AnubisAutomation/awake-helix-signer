@@ -169,14 +169,25 @@ try {
     await setLanguage(language);
     const words = LOCALIZED[language];
     await waitFor(`the ${language} summary`, async () => (await text("summary")).includes(words.summary));
-    assert((await text("editor")).includes(words.calls), `${language}: the editor names "${words.calls}"`);
+    // The editor's fieldset holds the time zone <datalist>, whose options WebKitWebDriver's
+    // "get element text" cannot handle (no enclosing <select>): read the field's label instead.
+    const callsLabel = await script("return document.querySelector('[data-testid=edit-calls]').closest('label').querySelector('.field-label').textContent");
+    assert(callsLabel === words.calls, `${language}: the editor names "${words.calls}"`);
+    assert((await text("edit-calls-help")).length > 20, `${language}: the calls help is shown`);
     assert((await text("edit-error")).includes(words.refused), `${language}: the website's refusal is translated by its code`);
     assert(!(await text("summary")).includes("bot operations"), `${language}: no English left in the summary`);
+    await script("document.querySelector('[data-testid=request-heading]').scrollIntoView()");
     await shot(`i18n-${language}-request`);
+    await script("document.querySelector('[data-testid=summary]').scrollIntoView()");
+    await shot(`i18n-${language}-summary`);
   }
   await setLanguage("en");
   await click("edit-defaults");
-  await waitFor("the default plan again", async () => (await text("summary")).includes("at most 256 bot operations"));
+  // The summary said 256 before too: wait until the re-plan is verified and the editor is enabled again.
+  await waitFor("the default plan again", async () =>
+    script("const calls = document.querySelector('[data-testid=edit-calls]'); return !calls.disabled && calls.value === '256' && !document.querySelector('[data-testid=edit-error]').textContent;"),
+  );
+  assert((await text("summary")).includes("at most 256 bot operations"), "back to the website's default plan");
 
   await type("edit-calls", "200");
   await type("edit-call-0", "15");
@@ -198,7 +209,9 @@ try {
   let world = await state();
   assert(world.sent.length === 1, "one transaction reached the chain");
   assert(world.reports.length === 1 && world.reports[0][0] === fake.signToken, "the website got the report");
-  assert(world.customized.length === 1 && world.customized[0].remainingCalls === 200, "the website got the edit");
+  // The refused edit (99999), the defaults ({}) and the signed edit (200).
+  assert(world.customized.length === 3 && world.customized[0].remainingCalls === 99999, "the website got the refused edit");
+  assert(world.customized.at(-1).remainingCalls === 200, "the website got the edit");
   assert((await script("return document.querySelector('[data-testid=key-panel] .key-form').hidden")) === false, "the key was wiped after signing");
 
   // ------------------------------------------------------------ 2. my grants
@@ -217,7 +230,9 @@ try {
   for (const language of SHOT_LANGUAGES) {
     await setLanguage(language);
     await waitFor(`the ${language} grants page`, async () => (await text("tab-grants")) === LOCALIZED[language].grants);
-    assert((await text("grants-table")).includes(LOCALIZED[language].calls), `${language}: the grants list names "${LOCALIZED[language].calls}"`);
+    // textContent: WebDriver's element text follows the rendered line breaks of the wrapped column name.
+    const column = await script("return document.querySelector('[data-testid=grants-col-calls]').textContent");
+    assert(column === LOCALIZED[language].calls, `${language}: the grants list names "${LOCALIZED[language].calls}"`);
     await shot(`i18n-${language}-grants`);
   }
   await setLanguage("en");
