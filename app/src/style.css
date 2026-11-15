@@ -177,7 +177,7 @@ main .page { border-top-left-radius: 0; }
 .grants { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 8px 0; }
 .grant-row {
   display: grid;
-  grid-template-columns: 2em 7em 8em minmax(9em, 1fr) 11em 11em 5em 8em;
+  grid-template-columns: 2em 7em 8em minmax(6.5em, 1fr) 11em 11em 7em 8em;
   gap: 6px;
   padding: 6px 8px;
   border-top: 1px solid var(--line);
@@ -188,6 +188,8 @@ main .page { border-top-left-radius: 0; }
 .grant-row.head { border-top: 0; font-weight: 600; color: var(--muted); cursor: default; background: var(--code); }
 .grant-row:has(input:checked) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .grant-row .cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Column names wrap instead of being cut (some languages need two lines). */
+.grant-row.head .cell { overflow-wrap: break-word; hyphens: auto; text-overflow: clip; line-height: 1.2; }
 .status-active .status, .status-not_yet_valid .status { color: var(--ok); font-weight: 600; }
 .status-revoked .status, .status-expired .status, .status-missing .status { color: var(--muted); }
 .status-inactive .status, .status-unavailable .status { color: var(--warning); font-weight: 600; }

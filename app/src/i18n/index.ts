@@ -206,9 +206,14 @@ export function formatNumber(value: number): string {
 
 /** A Unix time as date and time in the current language, in UTC or local time. */
 export function formatDate(seconds: number, zone: "UTC" | "local"): string {
+  // Numeric and compact (lists and the summary align), in the language's order.
   return new Intl.DateTimeFormat(locale(), {
-    dateStyle: "medium",
-    timeStyle: "medium",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
     hourCycle: "h23",
     ...(zone === "UTC" ? { timeZone: "UTC" } : {}),
   }).format(new Date(seconds * 1000));
