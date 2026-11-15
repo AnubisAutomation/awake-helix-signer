@@ -257,6 +257,41 @@ fn quantity(value: u64) -> String {
     format!("{value:#x}")
 }
 
+/// ``extraData`` of Anubis mainnet block 19,222,581: 280 bytes of
+/// proof-of-authority data (vanity, validator signature, vote attestation).
+/// Clients that require Ethereum's 32-byte limit fail on every real block;
+/// forks mine empty extraData and never showed it.
+pub const MAINNET_EXTRA_DATA: &str = concat!(
+    "0xda8301000188343861393536636288676f312e32362e31836c696e00effaa169f8b5831e",
+    "ffffb86090b4e56ef878e649ec700cc20537cc8649581cfad20e86103d340e79c166bed548",
+    "82725b7b5cacaaabb57fd12f9881b7087f712dd9a6b1bfaeab8ff88e7fea293ce23af16e86",
+    "0db3437a978137dad660d5e1c9fdf1c593133d71f75633f86f4ef84c8401255033a05e284e",
+    "d937bfa3b55f6549bf8fc7eb00a1fbba23b9aeee5f0ddc4cf34ebc1a578401255034a06a8b",
+    "912eef12d0519746007514ff25aa3fe502357513efe933094e6b0ff05c758094d9afbd373d",
+    "990d551149553febd73c47684fc8aa460ed3fa1376d2377675055e4782f0fbdeaa4e8bbb11",
+    "a45963df14248235dc8b21c2f51edf476091e21daa00",
+);
+
+/// An ``eth_getBlockByNumber`` result shaped like a real Anubis header.
+pub fn anubis_block(number: u64, timestamp: u64) -> Value {
+    json!({
+        "baseFeePerGas": "0x0", "blobGasUsed": "0x0", "difficulty": "0x2", "excessBlobGas": "0x0",
+        "extraData": MAINNET_EXTRA_DATA, "gasLimit": "0x5f5e100", "gasUsed": "0x577a9e",
+        "hash": format!("0x{:064x}", number), "logsBloom": format!("0x{}", "00".repeat(256)),
+        "milliTimestamp": quantity(timestamp * 1000), "miner": "0x01654850a9c457e3cb8d2d9672ab3abea00bb16b",
+        "mixHash": format!("0x{:064x}", 0x2bc), "nonce": "0x0000000000000000", "number": quantity(number),
+        "parentBeaconBlockRoot": format!("0x{}", "00".repeat(32)), "parentHash": format!("0x{:064x}", number.saturating_sub(1)),
+        "receiptsRoot": "0x131dd446b8dd3b80aea9d4e481a7002b651145ef44ee60fe462963fcb2deeaf7",
+        "requestsHash": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347", "size": "0xbef",
+        "stateRoot": "0xcf8a87b5f10492f1588ae9ff71d854b090411fb31f5a7ad4473cf64faf986ef0",
+        "timestamp": quantity(timestamp), "totalDifficulty": "0x24a9fde", "transactions": [],
+        "transactionsRoot": "0x67d36cdee0efa779dc599cb202ad2336df2c94aea04770708648a9a73b2f1407",
+        "uncles": [], "withdrawals": [],
+        "withdrawalsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+    })
+}
+
 impl Fake {
     pub fn new() -> Fake {
         let mut state = State { chain_id: 6714, estimate_with_authorization: true, estimate_with_override: true, block: 100, report_status: 200, login_domain: "127.0.0.1:18000".into(), ..State::default() };
@@ -290,7 +325,7 @@ impl Fake {
         match method {
             "eth_chainId" => Ok(json!(quantity(state.chain_id))),
             "eth_getCode" => Ok(json!(hex0x(state.code.get(&address(0)).map(Vec::as_slice).unwrap_or(&[])))),
-            "eth_getBlockByNumber" => Ok(json!({"number": quantity(state.block), "timestamp": quantity(now()), "baseFeePerGas": "0x0"})),
+            "eth_getBlockByNumber" => Ok(anubis_block(state.block, now())),
             "eth_getTransactionCount" => Ok(json!(quantity(*state.nonces.get(&address(0)).unwrap_or(&0)))),
             "eth_getBalance" => Ok(json!(format!("{:#x}", state.balances.get(&address(0)).copied().unwrap_or_default()))),
             "eth_gasPrice" => Ok(json!(quantity(12_000_000_000))),
