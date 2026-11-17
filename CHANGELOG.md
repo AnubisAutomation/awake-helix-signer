@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.4
+
+- Website calls wait at most 10 s to connect and then 30 s for the answer
+  (sign-in steps, the grant list, the revocation calls; logout 10 s), instead
+  of one 30 s limit for the whole request. Every other HTTPS/JSON-RPC request
+  also connects within 10 s and keeps its former answer timeout.
+- A slow or overloaded website is told apart from one that cannot be reached:
+  - "The website is busy and did not answer in time; try again in a moment"
+    (`website.busy`) when the answer did not come in time after connecting,
+    for HTTP 502/503/504, and for the website's new `server.busy` answer;
+  - "Cannot reach the website; check the internet connection" (`website.unreachable`)
+    for DNS failures, refused connections, connect timeouts and TLS failures.
+  Both are translated in all six languages. A failed sign-in still says
+  "Signing in to the website failed" (登入網站失敗…), now followed by the
+  translated cause instead of an English "Cannot reach …: timed out". Other
+  requests without an answer in time say so (`network.busy`), and the
+  website's own `server.busy` text is translated where it shows.
+- GET requests to the website (`/api/csrf`, `/api/grants`) are sent once more
+  after a 1.5 s pause when the website was busy or a timeout hit. POST
+  requests (sign-in challenge and verification, revocation call and
+  confirmation) are never repeated.
+- The grant list may come from the website's cached copy while it re-reads
+  the chain (`refreshing`, with `generatedAt`): the app shows that list at
+  once with a note "Updating the statuses from the chain…" and reads it again
+  every 3 s, up to 5 times; the command line reads it again the same way
+  before printing and says when statuses may be a few seconds old.
+  Revocation does not depend on it: the revocation call is always read fresh.
+
 ## 0.5.3
 
 - Typing AUTHORIZE / REVOKE in the app works with any input method: the word
