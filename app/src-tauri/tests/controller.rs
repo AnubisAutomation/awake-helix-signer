@@ -600,7 +600,7 @@ fn errors_carry_codes_for_the_page() {
     sign_link(&controller);
     controller.load_key(private_key("good")).unwrap();
     controller.prepare_request().unwrap();
-    let error = controller.sign("authorize").unwrap_err();
+    let error = controller.sign("AUTHORIZ").unwrap_err();
     assert_eq!((error.msg.code, error.msg.param("word")), ("app.mustType", Some("AUTHORIZE")));
     let json = serde_json::to_value(&error).unwrap();
     assert_eq!(json["msg"]["code"], "app.mustType");
