@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.3
+
+- Typing AUTHORIZE / REVOKE in the app works with any input method: the word
+  is compared after Unicode NFKC normalization (full-width letters such as
+  ＡＵＴＨＯＲＩＺＥ from a Chinese/Japanese/Korean input method count as
+  ASCII), ignoring case, spaces and invisible characters, in both the page
+  and the app backend (`flow::confirm_word_matches`). Look-alike letters from
+  other scripts are still refused. The command line keeps its exact prompt.
+- An Enter that only commits an input method's composition (Zhuyin, Pinyin,
+  kana…) no longer submits the word before it is in the field.
+- Sign and Confirm are enabled once the typed word matches; a refused word
+  stays in the field so it can be corrected instead of being cleared.
+
 ## 0.5.2
 
 - The app now shows everything in the selected language (繁體中文, 简体中文,

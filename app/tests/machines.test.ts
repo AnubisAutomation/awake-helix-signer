@@ -10,6 +10,8 @@ import {
   requestReducer,
   shouldPoll,
   wordMatches,
+  normalizeWord,
+  isComposingEnter,
   wouldDiscard,
   type GrantsState,
   type RequestState,
@@ -93,10 +95,20 @@ describe("request machine", () => {
     expect(requestReducer(verified, { type: "keyForgotten" }).phase).toBe("ready");
   });
 
-  it("matches the typed word exactly", () => {
-    expect(wordMatches(" AUTHORIZE ", "AUTHORIZE")).toBe(true);
-    expect(wordMatches("authorize", "AUTHORIZE")).toBe(false);
-    expect(wordMatches("AUTHORIZ", "AUTHORIZE")).toBe(false);
+  it("matches the typed word whatever the input method", () => {
+    for (const typed of [" AUTHORIZE ", "authorize", "Authorize", "ＡＵＴＨＯＲＩＺＥ", "ａｕｔｈｏｒｉｚｅ", "\u3000AUTHORIZE\u200B", "AUTHO RIZE"]) {
+      expect(wordMatches(typed, "AUTHORIZE"), typed).toBe(true);
+    }
+    expect(normalizeWord("ｒｅｖｏｋｅ ")).toBe("REVOKE");
+    for (const typed of ["", "AUTHORIZ", "AUTHORISE", "AUTHORIZED", "REVOKE", "\u0391UTHORIZE"]) {
+      expect(wordMatches(typed, "AUTHORIZE"), typed).toBe(false);
+    }
+  });
+
+  it("treats an Enter that commits an input method's composition as not a submit", () => {
+    expect(isComposingEnter(new KeyboardEvent("keydown", { key: "Enter", isComposing: true }))).toBe(true);
+    expect(isComposingEnter(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229 }))).toBe(true);
+    expect(isComposingEnter(new KeyboardEvent("keydown", { key: "Enter" }))).toBe(false);
   });
 });
 

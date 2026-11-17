@@ -365,7 +365,8 @@ export async function sign(word: string): Promise<boolean> {
   store.status = note("sign.signing");
   changed();
   try {
-    const result = await api.sign(word.trim());
+    // The canonical word: the typed one may be full-width or lower case.
+    const result = await api.sign(state.session.confirmWord);
     dispatchRequest({ type: "signed", result });
     resetEditor();
     log("request", note("result.done", { tx: result.txHash, block: result.block }, "ok"));
@@ -450,7 +451,7 @@ export async function confirmRevoke(word: string): Promise<boolean> {
   }
   dispatchGrants({ type: "confirm" });
   try {
-    const outcome = await api.grantsConfirm(word.trim());
+    const outcome = await api.grantsConfirm("REVOKE");
     outcome.lines.forEach((line) => log("grants", msgNote(line)));
     dispatchGrants({ type: "finished", outcome });
     log("grants", note(outcome.done < outcome.total ? "grants.finishedCancelled" : "grants.finished", { done: outcome.done, total: outcome.total }));

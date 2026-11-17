@@ -5,7 +5,7 @@ import { cancelRevoke, confirmRevoke, loadGrants, prepareRevoke, selectGrant, st
 import { h } from "../dom";
 import { formatDate, formatNumber, getLanguage, t } from "../i18n";
 import { short } from "../links";
-import { grantsButtons } from "../machines";
+import { grantsButtons, isComposingEnter, wordMatches } from "../machines";
 import { show, syncLog } from "./common";
 
 // Statuses the website sends; a newer one renders with a neutral label.
@@ -74,8 +74,9 @@ export class GrantsView {
 
   constructor() {
     this.confirmButton.addEventListener("click", () => void this.confirm());
+    this.word.addEventListener("input", () => this.update());
     this.word.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") void this.confirm();
+      if (event.key === "Enter" && !isComposingEnter(event)) void this.confirm();
     });
     this.root.append(
       this.help,
@@ -92,9 +93,8 @@ export class GrantsView {
   }
 
   private async confirm(): Promise<void> {
-    const typed = this.word.value;
-    this.word.value = "";
-    await confirmRevoke(typed);
+    // Keep what was typed when it is refused, so it can be corrected.
+    if (await confirmRevoke(this.word.value)) this.word.value = "";
   }
 
   private row(row: GrantRow): HTMLElement {
@@ -152,7 +152,8 @@ export class GrantsView {
     this.revokeAllButton.textContent = t("grants.revokeAll");
     this.revokeAllButton.disabled = !buttons.revokeAll;
     this.confirmButton.textContent = t("sign.button");
-    this.confirmButton.disabled = !buttons.confirm;
+    // Enabled once the typed word is REVOKE (full-width, case and spaces aside).
+    this.confirmButton.disabled = !buttons.confirm || !wordMatches(this.word.value, "REVOKE");
     this.cancelButton.textContent = t("grants.cancel");
     this.cancelButton.disabled = !buttons.cancel;
     this.wordLabel.textContent = t("grants.type");

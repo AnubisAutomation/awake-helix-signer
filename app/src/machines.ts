@@ -100,8 +100,23 @@ export function canSign(state: RequestState, editorDirty: boolean): boolean {
 }
 
 /** Whether the typed word matches exactly (surrounding spaces are ignored, case is not). */
+/**
+ * The typed confirmation word, made comparable: full-width letters from an
+ * input method (ＡＵＴＨＯＲＩＺＥ) become ASCII (NFKC), spaces and invisible
+ * characters are dropped, and case is ignored.
+ */
+export function normalizeWord(typed: string): string {
+  return typed.normalize("NFKC").replace(/[\s\u200B-\u200D\u2060\uFEFF]/gu, "").toUpperCase();
+}
+
+/** Whether the typed text is the confirmation word (see `normalizeWord`). */
 export function wordMatches(typed: string, word: string): boolean {
-  return typed.trim() === word;
+  return normalizeWord(typed) === word.toUpperCase();
+}
+
+/** An Enter that only commits an input method's composition (e.g. Zhuyin) must not submit. */
+export function isComposingEnter(event: KeyboardEvent): boolean {
+  return event.key === "Enter" && (event.isComposing || event.keyCode === 229);
 }
 
 // ----------------------------------------------------------------- grants

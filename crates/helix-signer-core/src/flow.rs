@@ -37,6 +37,19 @@ pub type Log<'a> = &'a dyn Fn(&Message);
 pub const AUTHORIZE: &str = "AUTHORIZE";
 /// Word the owner types to sign a revocation.
 pub const REVOKE: &str = "REVOKE";
+
+/// Whether a word typed in the app is the confirmation word: full-width
+/// letters from an input method (ＡＵＴＨＯＲＩＺＥ) count as ASCII (NFKC),
+/// spaces and invisible characters are ignored, and so is case. The terminal
+/// prompts keep their exact comparison.
+pub fn confirm_word_matches(typed: &str, word: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let cleaned: String = typed
+        .nfkc()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'))
+        .collect();
+    cleaned.to_uppercase() == word.to_uppercase()
+}
 /// Why a grant under a foreign EIP-7702 delegation is not revoked here.
 pub const FOREIGN_DELEGATION: &str = "this account is delegated (EIP-7702) to another contract, and the signer never overwrites someone else's delegation. The grant is inactive while that delegation stays; remove that delegation with the wallet that set it, then revoke the grant here.";
 
@@ -729,4 +742,25 @@ pub fn execute_grant_revoke(current: &Session, material: &KeyMaterial, site: &We
 /// Gas cost helper for callers that show an estimate.
 pub fn max_cost(gas: U256, max_fee: U256) -> U256 {
     gas.saturating_mul(max_fee)
+}
+
+#[cfg(test)]
+mod confirm_word_tests {
+    use super::{confirm_word_matches, AUTHORIZE, REVOKE};
+
+    #[test]
+    fn the_typed_word_matches_whatever_the_input_method() {
+        for typed in ["AUTHORIZE", " AUTHORIZE ", "authorize", "Authorize", "ＡＵＴＨＯＲＩＺＥ", "ａｕｔｈｏｒｉｚｅ", "AUTHORIZE\n", "\u{3000}AUTHORIZE\u{200B}", "AUTHO RIZE"] {
+            assert!(confirm_word_matches(typed, AUTHORIZE), "{typed:?}");
+        }
+        assert!(confirm_word_matches("ＲＥＶＯＫＥ", REVOKE));
+    }
+
+    #[test]
+    fn other_words_are_refused() {
+        for typed in ["", "AUTHORIZ", "AUTHORISE", "REVOKE", "AUTHORIZED", "ΑUTHORIZE"] {
+            assert!(!confirm_word_matches(typed, AUTHORIZE), "{typed:?}");
+        }
+        assert!(!confirm_word_matches("AUTHORIZE", REVOKE));
+    }
 }

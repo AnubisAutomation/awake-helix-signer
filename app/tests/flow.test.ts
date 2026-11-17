@@ -94,10 +94,23 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
     expect(store.request.phase).toBe("ready");
     type("key-private", "0x" + "11".repeat(32));
     await click("request-load");
-    type("confirm-word", "authorize");
-    await click("sign");
+    // A wrong word keeps Sign disabled; Enter says what to type and keeps the text.
+    type("confirm-word", "AUTHORIZ");
+    expect($<HTMLButtonElement>("sign").disabled).toBe(true);
+    $<HTMLInputElement>("confirm-word").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await settle();
     expect($("status").textContent).toBe("Type AUTHORIZE exactly to sign.");
+    expect($<HTMLInputElement>("confirm-word").value).toBe("AUTHORIZ");
     expect(backend.commands()).not.toContain("sign");
+    // The Enter that commits an input method's composition never submits.
+    type("confirm-word", "ＡＵＴＨＯＲＩＺＥ");
+    $<HTMLInputElement>("confirm-word").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true }));
+    await settle();
+    expect(backend.commands()).not.toContain("sign");
+    // Full-width or lower case: the word counts, and the canonical word is sent.
+    expect($<HTMLButtonElement>("sign").disabled).toBe(false);
+    await click("sign");
+    expect(backend.calls.filter(([command]) => command === "sign").at(-1)![1]).toEqual({ word: "AUTHORIZE" });
   });
 
   it("refuses foreign websites, unknown links and asks before discarding a verified plan", async () => {
@@ -144,11 +157,16 @@ describe("My grants", () => {
     expect($<HTMLButtonElement>("grants-revoke-selected").disabled).toBe(false);
     await click("grants-revoke-selected");
     expect($("grants-log").textContent).toContain("Grant ID: 0xa1 (policy grant)");
-    expect($<HTMLButtonElement>("grants-confirm").disabled).toBe(false);
-    type("grants-word", "revoke");
-    await click("grants-confirm");
+    // Confirm is enabled once the word is REVOKE (full-width / lower case count).
+    expect($<HTMLButtonElement>("grants-confirm").disabled).toBe(true);
+    type("grants-word", "revok");
+    expect($<HTMLButtonElement>("grants-confirm").disabled).toBe(true);
+    $<HTMLInputElement>("grants-word").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await settle();
     expect($("status").textContent).toBe("Type REVOKE exactly to sign.");
-    type("grants-word", "REVOKE");
+    expect($<HTMLInputElement>("grants-word").value).toBe("revok");
+    type("grants-word", "ｒｅｖｏｋｅ");
+    expect($<HTMLButtonElement>("grants-confirm").disabled).toBe(false);
     await click("grants-confirm");
     expect($("status").textContent).toBe("Revoked 1 of 1 grant(s).");
     expect(document.querySelector('[data-grant="0xa1"]')!.className).toContain("status-revoked");

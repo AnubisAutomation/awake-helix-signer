@@ -4,7 +4,7 @@ import { applyEdit, closeRequest, editorChanged, editorDefaults, editorDirty, ha
 import { field, h } from "../dom";
 import { buildRequest, combineExpiry, EditError, expiryParts, fieldsOf, isLocalZone, LOCAL, outOfRange, ZONES, type EditorPlan, type Fields } from "../editor";
 import { formatDate, formatNumber, getLanguage, t, tParts, unitName, type Parts } from "../i18n";
-import { canSign, requestBusy } from "../machines";
+import { canSign, isComposingEnter, requestBusy, wordMatches } from "../machines";
 import { noteParts, partsNodes, renderSummary, show, syncLog } from "./common";
 
 export class RequestView {
@@ -41,7 +41,7 @@ export class RequestView {
     this.signButton.addEventListener("click", () => void this.sign());
     this.word.addEventListener("input", () => this.updateSign());
     this.word.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") void this.sign();
+      if (event.key === "Enter" && !isComposingEnter(event)) void this.sign();
     });
     this.pasteRow.append(this.pasteInput, this.pasteButton);
     this.editorBox.append(this.editorTitle, this.editorBody);
@@ -77,7 +77,9 @@ export class RequestView {
   private updateSign(): void {
     const state = store.request;
     const dirty = editorDirty();
-    this.signButton.disabled = !canSign(state, dirty) || this.word.value.trim().length === 0;
+    // Enabled once the typed word matches (full-width, case and spaces aside).
+    const word = state.phase === "verified" ? state.session.confirmWord : "";
+    this.signButton.disabled = !canSign(state, dirty) || !word || !wordMatches(this.word.value, word);
     show(this.dirtyNote, state.phase === "verified" && dirty);
   }
 

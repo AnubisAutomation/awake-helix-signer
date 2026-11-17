@@ -284,7 +284,7 @@ impl<C: Core> Controller<C> {
             let mut state = self.lock();
             let session = state.session.clone().ok_or_else(|| CommandError::refused(msg!("app.noPlanToSign", "There is no verified plan to sign.")))?;
             let expected = self.core.session_view(&session).confirm_word;
-            if word.trim() != expected {
+            if !helix_signer_core::flow::confirm_word_matches(word, &expected) {
                 return Err(CommandError::refused(msg!("app.mustType", "Type {word} exactly to sign.", word = expected.as_str())));
             }
             let key = state.key.take().ok_or_else(CommandError::no_key)?;
@@ -386,7 +386,7 @@ impl<C: Core> Controller<C> {
     /// Sign, broadcast and confirm the verified revocations one by one.
     pub fn grants_confirm(&self, word: &str) -> CommandResult<RevokeOutcome> {
         let _busy = self.begin()?;
-        if word.trim() != "REVOKE" {
+        if !helix_signer_core::flow::confirm_word_matches(word, "REVOKE") {
             return Err(CommandError::refused(msg!("app.mustType", "Type {word} exactly to sign.", word = "REVOKE")));
         }
         let (sessions, key, site) = {

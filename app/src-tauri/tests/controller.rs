@@ -322,8 +322,9 @@ fn authorize_flow_verifies_edits_signs_and_wipes() {
     assert_eq!(refused.kind, "customize");
     assert_eq!(controller.key_status().map(|key| key.address), Some(OWNER.to_string()));
 
-    assert!(controller.sign("authorize").unwrap_err().message.contains("Type AUTHORIZE exactly"));
-    let result = controller.sign(" AUTHORIZE ").unwrap();
+    // A wrong word is refused; full-width / lower case (input methods) count.
+    assert!(controller.sign("AUTHORIZ").unwrap_err().message.contains("Type AUTHORIZE exactly"));
+    let result = controller.sign(" ａｕｔｈｏｒｉｚｅ ").unwrap();
     assert_eq!(result.block, 101);
     assert_eq!(mock.called("execute 200"), 1, "the edited plan was signed");
     // The key is gone after signing; a second sign has nothing to sign.
@@ -413,8 +414,8 @@ fn grants_sign_in_once_list_and_revoke_one() {
     assert!(controller.grants_prepare(Some(vec!["0xzz".into()])).is_err());
     let pending = controller.grants_prepare(Some(vec!["0xa1".into()])).unwrap();
     assert_eq!(pending.count, 1);
-    assert!(controller.grants_confirm("revoke").unwrap_err().message.contains("Type REVOKE exactly"));
-    let outcome = controller.grants_confirm("REVOKE").unwrap();
+    assert!(controller.grants_confirm("REVOK").unwrap_err().message.contains("Type REVOKE exactly"));
+    let outcome = controller.grants_confirm("ＲＥＶＯＫＥ").unwrap();
     assert_eq!((outcome.done, outcome.total, outcome.cancelled), (1, 1, false));
     assert_eq!(outcome.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), vec!["Revoked 0xa1 in transaction 0x0 (block 200); bot(s) stopped: 7."]);
     assert_eq!((outcome.lines[0].code, outcome.lines[0].param("bots")), ("app.revokedStopped", Some("7")));
