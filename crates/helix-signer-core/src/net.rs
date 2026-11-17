@@ -231,7 +231,11 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     /// Body.
     pub body: Option<Vec<u8>>,
-    /// Whole-request timeout.
+    /// Longest wait to connect (TCP, and TLS on top of it).
+    pub connect_timeout: Duration,
+    /// Read timeout: the longest wait for the answer once connected (and
+    /// for sending the request); a slow server fails with
+    /// [`Failure::NoAnswer`], not as unreachable.
     pub timeout: Duration,
 }
 
@@ -265,10 +269,42 @@ impl HttpResponse {
     }
 }
 
-/// The endpoint could not be reached (DNS, TLS, refused, timeout); the text
-/// is the reason shown after ``Cannot reach <origin>:``.
+/// Longest wait to connect to the website or the RPC.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Why a request got no HTTP answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// No connection: DNS failure, refused, TLS failure, connection reset.
+    Unreachable,
+    /// No connection within the connect timeout.
+    ConnectTimeout,
+    /// Connected, but the answer did not come within the read timeout (the
+    /// server is busy or overloaded).
+    NoAnswer,
+}
+
+/// The endpoint gave no HTTP answer; `detail` is the reason (``timed out``,
+/// ``Connection refused (os error 111)`` ...), shown untranslated.
 #[derive(Clone, Debug)]
-pub struct TransportError(pub String);
+pub struct TransportError {
+    /// What went wrong.
+    pub failure: Failure,
+    /// The reason, for the message.
+    pub detail: String,
+}
+
+impl TransportError {
+    /// A failure with its reason.
+    pub fn new(failure: Failure, detail: impl Into<String>) -> Self {
+        Self { failure, detail: detail.into() }
+    }
+
+    /// Whether the request timed out (connecting or waiting for the answer).
+    pub fn timed_out(&self) -> bool {
+        matches!(self.failure, Failure::ConnectTimeout | Failure::NoAnswer)
+    }
+}
 
 /// Something that sends HTTP requests. ``Transport::system()`` uses ureq with
 /// rustls; tests and the app may provide their own.
@@ -277,25 +313,36 @@ pub trait HttpClient: Send + Sync {
     fn send(&self, request: &HttpRequest) -> std::result::Result<HttpResponse, TransportError>;
 }
 
-/// The ureq + rustls client (system default).
+/// The ureq + rustls client (system default). ureq 2 sets connect and read
+/// timeouts per agent, so one agent (with its connection pool) is kept per
+/// pair of timeouts.
+#[derive(Default)]
 pub struct UreqClient {
-    agent: ureq::Agent,
+    agents: std::sync::Mutex<Vec<((Duration, Duration), ureq::Agent)>>,
 }
 
-impl Default for UreqClient {
-    fn default() -> Self {
-        Self { agent: ureq::AgentBuilder::new().redirects(0).build() }
+impl UreqClient {
+    fn agent(&self, connect: Duration, read: Duration) -> ureq::Agent {
+        let build = || ureq::AgentBuilder::new().redirects(0).timeout_connect(connect).timeout_read(read).timeout_write(read).build();
+        let Ok(mut agents) = self.agents.lock() else { return build() };
+        if let Some((_, agent)) = agents.iter().find(|(key, _)| *key == (connect, read)) {
+            return agent.clone();
+        }
+        let agent = build();
+        agents.push(((connect, read), agent.clone()));
+        agent
     }
+}
+
+fn io_timed_out(error: &std::io::Error) -> bool {
+    matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
 }
 
 fn describe(error: &ureq::Transport) -> String {
     let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
     while let Some(inner) = source {
         if let Some(io) = inner.downcast_ref::<std::io::Error>() {
-            return match io.kind() {
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "timed out".into(),
-                _ => io.to_string(),
-            };
+            return if io_timed_out(io) { "timed out".into() } else { io.to_string() };
         }
         source = inner.source();
     }
@@ -305,9 +352,30 @@ fn describe(error: &ureq::Transport) -> String {
     }
 }
 
+/// Connect failures (DNS, refused, connect timeout) come as ``Dns`` or
+/// ``ConnectionFailed``; once connected, errors come as ``Io``: a timeout
+/// there means no answer in time, anything else (TLS refused, reset) that
+/// the server cannot be talked to.
+fn classify(error: &ureq::Transport) -> Failure {
+    let mut timed_out = false;
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(inner) = source {
+        if let Some(io) = inner.downcast_ref::<std::io::Error>() {
+            timed_out = io_timed_out(io);
+            break;
+        }
+        source = inner.source();
+    }
+    match (error.kind(), timed_out) {
+        (ureq::ErrorKind::Io, true) => Failure::NoAnswer,
+        (ureq::ErrorKind::ConnectionFailed, true) => Failure::ConnectTimeout,
+        _ => Failure::Unreachable,
+    }
+}
+
 impl HttpClient for UreqClient {
     fn send(&self, request: &HttpRequest) -> std::result::Result<HttpResponse, TransportError> {
-        let mut call = self.agent.request(&request.method, &request.url).timeout(request.timeout);
+        let mut call = self.agent(request.connect_timeout, request.timeout).request(&request.method, &request.url);
         for (name, value) in &request.headers {
             call = call.set(name, value);
         }
@@ -318,7 +386,7 @@ impl HttpClient for UreqClient {
         let response = match answer {
             Ok(response) => response,
             Err(ureq::Error::Status(_, response)) => response,
-            Err(ureq::Error::Transport(error)) => return Err(TransportError(describe(&error))),
+            Err(ureq::Error::Transport(error)) => return Err(TransportError::new(classify(&error), describe(&error))),
         };
         let status = response.status();
         let mut headers = Vec::new();
@@ -328,11 +396,13 @@ impl HttpClient for UreqClient {
             }
         }
         let mut body = Vec::new();
-        response
-            .into_reader()
-            .take(MAX_RESPONSE_BYTES as u64 + 1)
-            .read_to_end(&mut body)
-            .map_err(|error| TransportError(error.to_string()))?;
+        response.into_reader().take(MAX_RESPONSE_BYTES as u64 + 1).read_to_end(&mut body).map_err(|error| {
+            if io_timed_out(&error) {
+                TransportError::new(Failure::NoAnswer, "timed out")
+            } else {
+                TransportError::new(Failure::Unreachable, error.to_string())
+            }
+        })?;
         Ok(HttpResponse { status, headers, body })
     }
 }
@@ -407,7 +477,23 @@ pub fn urljoin(base: &str, location: &str) -> String {
     format!("{}://{}{directory}{location}", parts.scheme, parts.netloc)
 }
 
+/// The error of a request without an HTTP answer, for any endpoint.
+pub fn transport_error(error: &TransportError, site: &str) -> Error {
+    let detail = error.detail.as_str();
+    let msg = match error.failure {
+        Failure::NoAnswer => crate::msg!(
+            "network.busy",
+            "{site} did not answer in time ({detail}); it may be busy, try again in a moment.",
+            site = site,
+            detail = detail
+        ),
+        Failure::Unreachable | Failure::ConnectTimeout => crate::msg!("network.unreachable", "Cannot reach {site}: {detail}", site = site, detail = detail),
+    };
+    Error::coded(ErrorKind::Network, msg)
+}
+
 /// Send one JSON request and return the JSON object answer (``net.http_json``).
+/// `timeout` is the read timeout; connecting waits at most [`CONNECT_TIMEOUT`].
 ///
 /// Redirects are followed as ``urllib.request.urlopen`` does: GET for any
 /// 301/302/303/307/308, a POST only for 301/302/303 (re-sent as a GET).
@@ -419,15 +505,14 @@ pub fn http_json(client: &dyn HttpClient, url: &str, method: &str, body: Option<
         url: url.to_string(),
         headers: vec![("Accept".into(), "application/json".into()), ("User-Agent".into(), user_agent())],
         body: data.clone(),
+        connect_timeout: CONNECT_TIMEOUT.min(timeout),
         timeout,
     };
     if data.is_some() {
         current.headers.push(("Content-Type".into(), "application/json".into()));
     }
     for _ in 0..=MAX_REDIRECTS {
-        let response = client
-            .send(&current)
-            .map_err(|error| Error::coded(ErrorKind::Network, crate::msg!("network.unreachable", "Cannot reach {site}: {detail}", site = &site, detail = error.0.as_str())))?;
+        let response = client.send(&current).map_err(|error| transport_error(&error, &site))?;
         if (200..300).contains(&response.status) {
             return json_object(&response.body, &site);
         }
@@ -528,6 +613,65 @@ mod tests {
         assert_eq!(parsed[1], ("api".to_string(), vec!["https://x.example".to_string()]));
         assert_eq!(parsed.len(), 2);
         assert_eq!(unquote("a%20b%zz%4"), "a b%zz%4");
+    }
+
+    fn get(url: String, connect: Duration, read: Duration) -> HttpRequest {
+        HttpRequest { method: "GET".into(), url, headers: Vec::new(), body: None, connect_timeout: connect, timeout: read }
+    }
+
+    #[test]
+    fn connect_and_read_timeouts_are_told_apart() {
+        let client = UreqClient::default();
+        let short = Duration::from_millis(300);
+        // Accepts the connection and never answers: no answer (busy).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+            drop(stream);
+        });
+        let started = std::time::Instant::now();
+        let error = client.send(&get(format!("http://127.0.0.1:{port}/"), Duration::from_secs(10), short)).unwrap_err();
+        assert_eq!((error.failure, error.detail.as_str()), (Failure::NoAnswer, "timed out"));
+        assert!(error.timed_out());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        held.join().unwrap();
+        // Nobody listens: unreachable at once, not a timeout.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let error = client.send(&get(format!("http://127.0.0.1:{closed}/"), short, short)).unwrap_err();
+        assert_eq!(error.failure, Failure::Unreachable, "{}", error.detail);
+        assert!(!error.timed_out());
+        // TLS refused (the server speaks plain HTTP): unreachable.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let plain = std::thread::spawn(move || {
+            use std::io::Write;
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let error = client.send(&get(format!("https://127.0.0.1:{port}/"), short, short)).unwrap_err();
+        assert_eq!(error.failure, Failure::Unreachable, "{}", error.detail);
+        plain.join().unwrap();
+        // A host that never answers the connection (a blackhole address, or
+        // no route at all in a sandbox): never "no answer".
+        let error = client.send(&get("http://10.255.255.1:81/".into(), Duration::from_millis(200), short)).unwrap_err();
+        assert_ne!(error.failure, Failure::NoAnswer, "{}", error.detail);
+        // One agent per pair of timeouts.
+        assert_eq!(client.agents.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn messages_of_requests_without_answer() {
+        let busy = transport_error(&TransportError::new(Failure::NoAnswer, "timed out"), "https://rpc.example");
+        assert_eq!(busy.msg().code, "network.busy");
+        assert_eq!(busy.kind(), ErrorKind::Network);
+        for failure in [Failure::Unreachable, Failure::ConnectTimeout] {
+            let error = transport_error(&TransportError::new(failure, "timed out"), "https://rpc.example");
+            assert_eq!(error.msg().code, "network.unreachable");
+            assert_eq!(error.message(), "Cannot reach https://rpc.example: timed out");
+        }
     }
 
     #[test]

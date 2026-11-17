@@ -163,6 +163,7 @@ export class GrantsView {
     const notes: string[] = [];
     if (listing && !listing.scanComplete) notes.push(t("grants.scanning", { percent: listing.scanPercent }));
     if (listing?.truncated) notes.push(t("grants.truncated"));
+    if (listing?.refreshing) notes.push(t("grants.refreshing"));
     this.scan.replaceChildren(...notes.map((note) => h("span", { class: "scan-note" }, note)));
     if (this.listed !== listing || this.table.dataset.language !== getLanguage()) {
       this.listed = listing;

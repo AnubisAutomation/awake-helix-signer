@@ -30,6 +30,9 @@ const PASSWORD_ATTEMPTS: usize = 3;
 const EDIT_WORD: &str = "EDIT";
 const SCAN_POLLS: usize = 20;
 const SCAN_POLL_SECONDS: u64 = 3;
+/// Reads of the list while the website refreshes its cached copy from the chain.
+const REFRESH_POLLS: usize = 5;
+const REFRESH_POLL_SECONDS: u64 = 3;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -475,19 +478,35 @@ fn print_listing(listing: &Listing, console: &Console) {
     if listing.truncated {
         console.out("Only the newest 100 grants are listed.");
     }
+    if listing.refreshing {
+        console.out("The website is still updating these statuses from the chain; they may be a few seconds old. Run this again in a moment.");
+    }
 }
 
 fn full_listing(site: &Website, console: &Console) -> Result<Listing> {
-    let mut listing = site.grants()?;
-    for _ in 0..SCAN_POLLS {
-        if listing.scan_complete {
-            break;
+    poll_listing(&mut || site.grants(), &mut |line| console.out(line), &mut |seconds| std::thread::sleep(Duration::from_secs(seconds)))
+}
+
+/// Read the list again while the website scans the install history (up to
+/// `SCAN_POLLS` times) or answers from its cached copy while it refreshes
+/// the statuses from the chain (up to `REFRESH_POLLS` times).
+fn poll_listing(fetch: &mut dyn FnMut() -> Result<Listing>, out: &mut dyn FnMut(&str), sleep: &mut dyn FnMut(u64)) -> Result<Listing> {
+    let mut listing = fetch()?;
+    let (mut scans, mut refreshes) = (0, 0);
+    loop {
+        if !listing.scan_complete && scans < SCAN_POLLS {
+            scans += 1;
+            out(&format!("The website is scanning the install history ({}%) ...", listing.scan_percent));
+            sleep(SCAN_POLL_SECONDS);
+        } else if listing.scan_complete && listing.refreshing && refreshes < REFRESH_POLLS {
+            refreshes += 1;
+            out("The website is updating the grant statuses from the chain ...");
+            sleep(REFRESH_POLL_SECONDS);
+        } else {
+            return Ok(listing);
         }
-        console.out(&format!("The website is scanning the install history ({}%) ...", listing.scan_percent));
-        std::thread::sleep(Duration::from_secs(SCAN_POLL_SECONDS));
-        listing = site.grants()?;
+        listing = fetch()?;
     }
-    Ok(listing)
 }
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -837,4 +856,59 @@ fn main() -> ExitCode {
         },
     };
     ExitCode::from(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listing(scan_complete: bool, refreshing: bool) -> Listing {
+        Listing {
+            owner: String::new(),
+            rows: Vec::new(),
+            scan_complete,
+            scan_percent: if scan_complete { 100 } else { 40 },
+            truncated: false,
+            delegation: serde_json::json!({}),
+            refreshing,
+            generated_at: String::new(),
+        }
+    }
+
+    fn polls(answers: Vec<Listing>) -> (Listing, usize, Vec<String>, Vec<u64>) {
+        let mut queue = answers;
+        let mut fetched = 0;
+        let mut lines = Vec::new();
+        let mut slept = Vec::new();
+        let last = poll_listing(
+            &mut || {
+                fetched += 1;
+                Ok(if queue.len() > 1 { queue.remove(0) } else { queue[0].clone() })
+            },
+            &mut |line| lines.push(line.to_string()),
+            &mut |seconds| slept.push(seconds),
+        )
+        .unwrap();
+        (last, fetched, lines, slept)
+    }
+
+    #[test]
+    fn reads_again_while_the_website_refreshes() {
+        // Fresh after two cached answers.
+        let (last, fetched, lines, slept) = polls(vec![listing(true, true), listing(true, true), listing(true, false)]);
+        assert!(!last.refreshing);
+        assert_eq!(fetched, 3);
+        assert_eq!(slept, [REFRESH_POLL_SECONDS; 2]);
+        assert!(lines.iter().all(|line| line.contains("updating the grant statuses from the chain")));
+        // Still cached: at most REFRESH_POLLS more reads, then the cached list.
+        let (last, fetched, _, _) = polls(vec![listing(true, true)]);
+        assert!(last.refreshing);
+        assert_eq!(fetched, 1 + REFRESH_POLLS);
+        // Fresh at once: one read.
+        assert_eq!(polls(vec![listing(true, false)]).1, 1);
+        // Scanning first, then refreshing.
+        let (_, fetched, lines, _) = polls(vec![listing(false, true), listing(true, true), listing(true, false)]);
+        assert_eq!(fetched, 3);
+        assert!(lines[0].contains("scanning") && lines[1].contains("updating"), "{lines:?}");
+    }
 }

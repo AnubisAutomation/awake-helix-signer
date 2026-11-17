@@ -144,11 +144,12 @@ describe("every screen follows the selected language", () => {
       grantRow("0xa9", "missing", { revocable: false, remainingCalls: null, validUntil: null }),
       grantRow("0xaa", "frozen_by_dao", { revocable: false }),
     ];
-    backend.answers.grants_load = () => ({ ...listing(), rows, scanComplete: false, scanPercent: 40, truncated: true });
+    backend.answers.grants_load = () => ({ ...listing(), rows, scanComplete: false, scanPercent: 40, truncated: true, refreshing: true });
     await handleUrl("awakehelix://grants");
     await unlockPrivateKey();
     await click("grants-load");
     expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(rows.length);
+    expect($("grants-scan").textContent).toContain("Updating the statuses from the chain");
     expectEveryLanguage("grants list with every status");
 
     backend.answers.grants_prepare = () => ({ count: 2, summaries: ["", ""], summaryData: [revokeSummary("0xa1"), revokeSummary("0xa6", true)] });
@@ -176,6 +177,42 @@ describe("every screen follows the selected language", () => {
       expect($("status").textContent).toContain(DICTIONARIES[language]["site.grants.unreadable"]);
     }
     expectEveryLanguage("grants unreadable");
+  });
+
+  it("grants: a busy or unreachable website, also while signing in", async () => {
+    const SITE = "https://anubis.sivilization.com";
+    const busy = m("website.busy", `The website ${SITE} is busy and did not answer in time (timed out); try again in a moment.`, { site: SITE, detail: "timed out" });
+    const unreachable = m("website.unreachable", `Cannot reach the website ${SITE} (dns error); check the internet connection and try again.`, {
+      site: SITE,
+      detail: "dns error",
+    });
+    const cases: [Msg, string, string][] = [
+      [m("login.failed", `Signing in to the website failed. ${busy.text}`, { cause: busy }), "core.login.failed", "core.website.busy"],
+      [m("login.failed", `Signing in to the website failed. ${unreachable.text}`, { cause: unreachable }), "core.login.failed", "core.website.unreachable"],
+      [busy, "core.website.busy", "core.website.busy"],
+    ];
+    await handleUrl("awakehelix://grants");
+    await unlockPrivateKey();
+    for (const [msg, outer, inner] of cases) {
+      backend.answers.grants_load = () => {
+        throw { kind: "refused", message: msg.text, msg };
+      };
+      await click("grants-load");
+      const shown = new Set<string>();
+      for (const language of LANGUAGES) {
+        setLanguage(language);
+        const table = DICTIONARIES[language] as Record<string, string>;
+        const status = $("status").textContent!;
+        // The step (signing in) and the cause, both translated; the site is data.
+        expect(status, language).toContain(table[outer].split("{")[0].trim());
+        expect(status, language).toContain(table[inner].split("{")[0].trim());
+        expect(status, language).toContain(SITE);
+        shown.add(status);
+      }
+      expect(shown.size).toBe(LANGUAGES.length);
+      setLanguage("en");
+      expectEveryLanguage(msg.code);
+    }
   });
 
   it("this computer, the save dialog and the forget dialog", async () => {
@@ -309,7 +346,7 @@ describe("codes of the core and the backend", () => {
       "auth.required", "plan.notFound", "plan.used", "plan.replaced", "plan.finished", "plan.expired", "plan.notCustomizable", "plan.botActive",
       "plan.notFetched", "plan.reportClosed", "plan.doneByOther", "bounds.tooFar", "bounds.expiry", "bounds.calls", "bounds.perCall", "bounds.perDay",
       "bounds.notDecimal", "bounds.notPositive", "bounds.notWhole", "grants.unreadable", "grant.notFound", "grant.revoked", "grant.missing",
-      "grant.otherDelegation", "chain.unreadable", "check.notFound", "check.used", "check.expired",
+      "grant.otherDelegation", "chain.unreadable", "check.notFound", "check.used", "check.expired", "server.busy",
     ]) {
       expect(en, code).toHaveProperty([`site.${code}`]);
     }

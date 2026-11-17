@@ -235,6 +235,7 @@ fn listing_view(listing: &core::Listing) -> ListingView {
         scan_complete: listing.scan_complete,
         scan_percent: listing.scan_percent,
         truncated: listing.truncated,
+        refreshing: listing.refreshing,
     }
 }
 

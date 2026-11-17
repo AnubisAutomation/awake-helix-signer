@@ -9,9 +9,9 @@ import {
   grantsReducer,
   initialGrants,
   initialRequest,
+  pollReason,
   requestBusy,
   requestReducer,
-  shouldPoll,
   wordMatches,
   wouldDiscard,
   type GrantsEvent,
@@ -63,6 +63,8 @@ export interface Store {
 }
 
 export const SCAN_POLL_MS = 5000;
+/** Pause before reading the list again while the website refreshes it from the chain. */
+export const REFRESH_POLL_MS = 3000;
 export const PING_CLOSE_SECONDS = 5;
 
 export const store: Store = {
@@ -383,25 +385,33 @@ export async function sign(word: string): Promise<boolean> {
 // ----------------------------------------------------------------- grants
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+/** Reads made because the website sent its cached list (reset by a load). */
+let refreshes = 0;
 
 function stopPolling(): void {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
 }
 
-function schedulePoll(): void {
+/** Read the list again later while the website scans the install history or
+ * refreshes its cached copy; the list shown stays until the new one comes. */
+function schedulePoll(fresh = false): void {
   stopPolling();
-  if (!shouldPoll(store.grants)) return;
+  if (fresh) refreshes = 0;
+  const reason = pollReason(store.grants, refreshes);
+  if (!reason) return;
   pollTimer = setTimeout(async () => {
     pollTimer = null;
-    if (!shouldPoll(store.grants)) return;
+    const now = pollReason(store.grants, refreshes);
+    if (!now) return;
+    if (now === "refresh") refreshes += 1;
     try {
       dispatchGrants({ type: "listed", listing: await api.grantsLoad(), quiet: true });
       schedulePoll();
     } catch (error) {
       log("grants", errorNote(error as CommandError));
     }
-  }, SCAN_POLL_MS);
+  }, reason === "scan" ? SCAN_POLL_MS : REFRESH_POLL_MS);
 }
 
 export async function loadGrants(): Promise<void> {
@@ -410,7 +420,7 @@ export async function loadGrants(): Promise<void> {
   try {
     await ensureKey("grants");
     dispatchGrants({ type: "listed", listing: await api.grantsLoad() });
-    schedulePoll();
+    schedulePoll(true);
   } catch (error) {
     grantsFailed(error as CommandError);
     await syncKey();
@@ -455,7 +465,7 @@ export async function confirmRevoke(word: string): Promise<boolean> {
     outcome.lines.forEach((line) => log("grants", msgNote(line)));
     dispatchGrants({ type: "finished", outcome });
     log("grants", note(outcome.done < outcome.total ? "grants.finishedCancelled" : "grants.finished", { done: outcome.done, total: outcome.total }));
-    schedulePoll();
+    schedulePoll(true);
     return true;
   } catch (error) {
     grantsFailed(error as CommandError);

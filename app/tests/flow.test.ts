@@ -4,9 +4,9 @@
 // install check. The real backend is covered by the Rust tests and the
 // end-to-end test.
 import { setTransport } from "../src/api";
-import { handleUrl, start, store } from "../src/app";
+import { handleUrl, REFRESH_POLL_MS, start, store } from "../src/app";
 import { setLanguage } from "../src/i18n";
-import { initialGrants, initialRequest } from "../src/machines";
+import { initialGrants, initialRequest, REFRESH_POLLS } from "../src/machines";
 import { Shell } from "../src/views/shell";
 import { $, click, FakeBackend, listing, OWNER, settle, type } from "./fixtures";
 
@@ -221,6 +221,55 @@ describe("My grants", () => {
     await click("grants-load");
     expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(3);
     expect($("grants-notes").hidden).toBe(true);
+  });
+
+  it("shows the website's cached list and reads it again while the website refreshes it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const flush = async () => {
+        for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0);
+      };
+      let reads = 0;
+      let fresh = 3;
+      backend.answers.grants_load = () => {
+        reads += 1;
+        return { ...listing(), refreshing: reads < fresh };
+      };
+      await handleUrl("awakehelix://grants");
+      $<HTMLInputElement>("key-source-privateKey").click();
+      type("key-private", "0x" + "11".repeat(32));
+      $("grants-load").click();
+      await flush();
+      expect(reads).toBe(1);
+      // The cached list is shown at once, with a note.
+      expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(3);
+      expect($("grants-scan").textContent).toContain("Updating the statuses from the chain");
+      await vi.advanceTimersByTimeAsync(REFRESH_POLL_MS - 100);
+      expect(reads).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      await flush();
+      expect(reads).toBe(2);
+      await vi.advanceTimersByTimeAsync(REFRESH_POLL_MS);
+      await flush();
+      expect(reads).toBe(3);
+      expect($("grants-scan").textContent).not.toContain("Updating");
+      await vi.advanceTimersByTimeAsync(REFRESH_POLL_MS * 5);
+      expect(reads).toBe(3);
+
+      // Still cached after every read: at most REFRESH_POLLS more, the list stays.
+      reads = 0;
+      fresh = Infinity;
+      $("grants-load").click();
+      await flush();
+      await vi.advanceTimersByTimeAsync(REFRESH_POLL_MS * (REFRESH_POLLS + 5));
+      await flush();
+      expect(reads).toBe(1 + REFRESH_POLLS);
+      expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(3);
+      expect($("grants-scan").textContent).toContain("Updating the statuses from the chain");
+      expect(backend.commands().filter((command) => command === "grants_load")).toHaveLength(3 + 1 + REFRESH_POLLS);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("translates the new statuses in every language", async () => {

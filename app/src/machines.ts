@@ -249,3 +249,16 @@ export function grantsReducer(state: GrantsState, event: GrantsEvent): GrantsSta
 export function shouldPoll(state: GrantsState): boolean {
   return state.phase === "listed" && !!state.listing && !state.listing.scanComplete;
 }
+
+/** Reads of the list while the website answers from its cached copy. */
+export const REFRESH_POLLS = 5;
+
+/** Why the list should be read again soon: the website scans the install
+ * history, or it sent its cached copy while it refreshes the statuses from
+ * the chain (`refreshes`: reads already made for that, at most
+ * `REFRESH_POLLS`); null when not. */
+export function pollReason(state: GrantsState, refreshes: number): "scan" | "refresh" | null {
+  if (shouldPoll(state)) return "scan";
+  if (state.phase === "listed" && state.listing?.refreshing && refreshes < REFRESH_POLLS) return "refresh";
+  return null;
+}

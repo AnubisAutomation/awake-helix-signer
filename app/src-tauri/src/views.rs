@@ -180,6 +180,9 @@ pub struct ListingView {
     pub scan_complete: bool,
     pub scan_percent: i64,
     pub truncated: bool,
+    /// The website's cached copy while it re-reads the chain (statuses may be
+    /// a few seconds old); the page reads the list again shortly.
+    pub refreshing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

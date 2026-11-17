@@ -153,6 +153,10 @@ export interface Listing {
   scanComplete: boolean;
   scanPercent: number;
   truncated: boolean;
+  /** The website's cached copy while it re-reads the chain (statuses may be a
+   * few seconds old); the page reads the list again shortly. Revocation never
+   * relies on it (the revocation call is read fresh). */
+  refreshing?: boolean;
 }
 
 export interface Pending {

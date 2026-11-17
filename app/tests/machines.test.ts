@@ -8,6 +8,8 @@ import {
   initialRequest,
   requestBusy,
   requestReducer,
+  pollReason,
+  REFRESH_POLLS,
   shouldPoll,
   wordMatches,
   normalizeWord,
@@ -194,6 +196,21 @@ describe("grants machine", () => {
     const preparing = grantsReducer(scanning, { type: "prepare" });
     expect(grantsReducer(preparing, { type: "listed", listing: list, quiet: true })).toBe(preparing);
     expect(shouldPoll(grantsReducer(scanning, { type: "listed", listing: list, quiet: true }))).toBe(false);
+  });
+
+  it("reads a cached list again a few times while the website refreshes it", () => {
+    const listed = (refreshing: boolean, scanComplete = true) =>
+      grants([{ type: "load" }, { type: "listed", listing: { ...listing([{}], scanComplete), refreshing } }]);
+    expect(pollReason(listed(true), 0)).toBe("refresh");
+    expect(pollReason(listed(true), REFRESH_POLLS - 1)).toBe("refresh");
+    expect(pollReason(listed(true), REFRESH_POLLS)).toBeNull();
+    expect(pollReason(listed(false), 0)).toBeNull();
+    expect(pollReason(grants([{ type: "load" }, { type: "listed", listing: list }]), 0)).toBeNull();
+    // Scanning wins (its own pace, no limit here).
+    expect(pollReason(listed(true, false), REFRESH_POLLS)).toBe("scan");
+    // Not while an action runs; revoke buttons do not depend on it.
+    expect(pollReason(grantsReducer(listed(true), { type: "prepare" }), 0)).toBeNull();
+    expect(grantsButtons(listed(true))).toEqual(grantsButtons(listed(false)));
   });
 
   it("selection is frozen while a revocation is pending", () => {

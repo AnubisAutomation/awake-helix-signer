@@ -139,6 +139,7 @@ export const en = {
   "grants.empty": "There are no grants on this account yet.",
   "grants.scanning": "Scanning install history: {percent}%",
   "grants.truncated": "Only the newest 100 grants are listed",
+  "grants.refreshing": "Updating the statuses from the chain…",
   "grants.count": "{count} grant(s) on {owner}.",
   "grants.confirmPrompt": "Read the summary below. Type REVOKE and press Sign and broadcast to revoke {count} grant(s).",
   "grants.nothing": "Nothing to revoke: the chain shows these grants are already gone.",
@@ -302,6 +303,7 @@ export const en = {
   "site.check.notFound": "The website does not know this install check.",
   "site.check.used": "This install check was already confirmed; return to the website.",
   "site.check.expired": "This install check expired (10 minutes); press “I have installed it, verify” on the website again.",
+  "site.server.busy": "The website is busy right now; try again in a moment.",
 
   "core.app.busy": "Wait for the current request to finish.",
   "core.app.chooseKeystore": "Choose the keystore file.",
@@ -392,10 +394,12 @@ export const en = {
   "core.log.reportUrl": "Note: the plan names report URL {named}; the signer reports to {expected}.",
   "core.log.signingIn": "Signing in to {domain} as {owner} (a signature only; no transaction) ...",
   "core.log.waitingReceipt": "Waiting for the receipt ...",
+  "core.login.failed": "Signing in to the website failed. {cause}",
   "core.login.notOurs": "The website's sign-in message is not for this account; nothing was signed.",
   "core.login.otherAccount": "The website signed in another account.",
   "core.login.otherListing": "The website listed the grants of another account.",
   "core.login.refused": "The website refused the sign-in: {error}",
+  "core.network.busy": "{site} did not answer in time; it may be busy, try again in a moment.",
   "core.network.notJson": "{site} did not answer with JSON.",
   "core.network.notObject": "{site} did not answer with a JSON object.",
   "core.network.tooLarge": "Response from {site} is too large.",
@@ -407,6 +411,8 @@ export const en = {
   "core.ping.unknown": "The website does not know this check. Press the verify button on the website again.",
   "core.ping.used": "This check was already confirmed; return to the browser.",
   "core.plan.badToken": "The plan token is malformed; open the request from the website again.",
+  "core.website.busy": "The website {site} is busy and did not answer in time; try again in a moment.",
+  "core.website.unreachable": "Cannot reach the website {site}; check the internet connection and try again.",
 } as const;
 
 export type Key = keyof typeof en;
