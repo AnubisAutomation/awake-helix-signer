@@ -117,6 +117,7 @@ impl Mock {
             scan_complete: true,
             scan_percent: 100,
             truncated: false,
+            refreshing: false,
         }
     }
 }
