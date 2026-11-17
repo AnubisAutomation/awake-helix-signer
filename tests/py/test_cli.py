@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import re
 import os
 import secrets
 import socket
@@ -35,6 +36,8 @@ import harness
 import signer_constants as c
 
 BIN = harness.RUST_BIN
+# The CLI's version, from the workspace manifest (so a release bump needs no test edit).
+VERSION = re.search(r'(?m)^version = "([^"]+)"', (harness.ROOT / "Cargo.toml").read_text(encoding="utf-8")).group(1)
 MNEMONIC = "test test test test test test test test test test test junk"
 MNEMONIC_ADDRESSES = ("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
 GRANT_A, GRANT_B, GRANT_C = "0x" + "a1" * 32, "0x" + "b2" * 32, "0x" + "c3" * 32
@@ -550,10 +553,10 @@ class PingTests(CliCase):
         token, body = self.world.fake.pings[0]
         self.assertEqual(token, self.TOKEN)
         self.assertEqual(set(body), {"version", "os", "arch"})
-        self.assertEqual(body["version"], "0.5.2")
+        self.assertEqual(body["version"], VERSION)
         method, _, headers, _ = self.world.fake.log[-1]
         self.assertEqual(method, "POST")
-        self.assertEqual(headers.get("User-Agent"), "awake-helix-signer/0.5.2")
+        self.assertEqual(headers.get("User-Agent"), f"awake-helix-signer/{VERSION}")
         self.assertEqual(headers.get("Content-Type"), "application/json")
         for status, fragment in ((404, "does not know"), (409, "already confirmed"), (410, "expired"), (429, "Too many"), (500, "refused")):
             self.world.fake.ping_status = status
@@ -607,7 +610,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(signed.code, 0, signed)
 
     def test_version_help_status(self) -> None:
-        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), "awake-helix-signer 0.5.2")
+        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), f"awake-helix-signer {VERSION}")
         self.assertEqual(harness.run(BIN, ["--version", "sign"]).code, 0)
         help_text = harness.run(BIN, ["--help"])
         self.assertEqual(help_text.code, 0)
@@ -616,7 +619,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(harness.run(BIN, []).code, 2)
         status = harness.run(BIN, ["status"])
         self.assertEqual(status.code, 0, status)
-        self.assertIn("awake-helix-signer 0.5.2", status.stdout)
+        self.assertIn(f"awake-helix-signer {VERSION}", status.stdout)
         self.assertIn("awakehelix:// handler:", status.stdout)
         self.assertEqual(harness.run(BIN, ["--selftest"]).code, 0)
 
@@ -712,7 +715,7 @@ class CompanionTests(CliCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], SITE)
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual((body["name"], body["paired"], body["chainId"], body["version"], body["keyLoaded"], body["owner"]),
-                         ("awake-helix-signer", False, 6714, "0.5.2", True, self.owner))
+                         ("awake-helix-signer", False, 6714, VERSION, True, self.owner))
         self.assertTrue(body["constantsHash"].startswith("0x"))
         for origin in ("https://evil.example", "https://anubis.sivilization.com.evil.example", "null", None):
             status, headers, _ = self.request("GET", "/health", origin=origin)
