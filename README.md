@@ -53,8 +53,11 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 | Android | `awake-helix-signer-<version>-android-universal.apk` |
 
 Release files are built by GitHub Actions from the tagged commit
-([`release.yml`](.github/workflows/release.yml)). iOS is not offered for
-download; build it yourself on a Mac ([docs/BUILD.md](docs/BUILD.md)).
+([`release.yml`](.github/workflows/release.yml)). iOS has only a test build:
+the unsigned IPA from `build.sh ios --release` on a Mac, installed with
+SideStore or AltStore; the website may offer it next to the release files, but
+it is not built by GitHub Actions and has no build provenance
+([docs/BUILD.md](docs/BUILD.md)).
 
 ### Verify a download
 

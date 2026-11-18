@@ -15,8 +15,10 @@ one folder), derives os/arch/kind from the file name, and writes::
 plus ``SHA256SUMS`` (``sha256sum -c`` format). The per-file ``<file>.sha256``
 files and the build's own ``SHA256SUMS`` are skipped (``write`` replaces
 ``SHA256SUMS``). It refuses files of another version, ``-debug`` builds, the
-iOS IPA (not published) and any unknown name, so a stale or stray file never
-ships. ``verify`` re-hashes every listed file and checks the sizes and
+team-signed iOS IPA (``-ios.ipa``: it installs only on the team's registered
+devices) and any unknown name, so a stale or stray file never ships. The
+unsigned iOS IPA (``-ios-unsigned.ipa``, a test build that SideStore or
+AltStore re-sign with the user's Apple ID) is listed as ios/arm64/ipa. ``verify`` re-hashes every listed file and checks the sizes and
 SHA256SUMS; it exits 1 on any mismatch. The Awake Helix website's download page
 (``/downloads/signer``) reads this manifest at runtime; its publishing step
 runs ``write`` and ``verify``.
@@ -38,9 +40,9 @@ NAME = "awake-helix-signer"
 SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.+-][0-9A-Za-z.]+)?$")
-OSES = {"windows", "macos", "linux", "android"}
+OSES = {"windows", "macos", "linux", "android", "ios"}
 ARCHES = {"x86_64", "arm64", "universal"}
-KINDS = {"installer", "dmg", "appimage", "deb", "apk", "cli"}
+KINDS = {"installer", "dmg", "appimage", "deb", "apk", "ipa", "cli"}
 # File name suffix -> (os, arch, kind). Windows "x64" is the usual name of x86_64.
 PATTERNS = (
     ("-windows-x64-setup.exe", ("windows", "x86_64", "installer")),
@@ -51,6 +53,7 @@ PATTERNS = (
     *((f"-linux-{arch}.deb", ("linux", arch, "deb")) for arch in ("x86_64", "arm64")),
     *((f"-linux-{arch}-cli.tar.gz", ("linux", arch, "cli")) for arch in ("x86_64", "arm64")),
     ("-android-universal.apk", ("android", "universal", "apk")),
+    ("-ios-unsigned.ipa", ("ios", "arm64", "ipa")),
 )
 IGNORED = {"manifest.json", "SHA256SUMS"}
 

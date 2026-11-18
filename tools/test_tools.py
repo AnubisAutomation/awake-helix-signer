@@ -78,7 +78,18 @@ class ReleaseManifestTests(unittest.TestCase):
             problems = release_manifest.verify(folder)
             self.assertTrue(any("sha256" in problem and manifest["files"][2]["name"] in problem for problem in problems), problems)
 
-    def test_refuses_other_versions_debug_builds_ios_and_unknown_files(self) -> None:
+    def test_lists_the_unsigned_ios_ipa(self) -> None:
+        # The SideStore/AltStore test build is published as ios/arm64/ipa.
+        with tempfile.TemporaryDirectory() as raw:
+            folder = Path(raw)
+            build_output(folder, suffixes=("linux-x86_64.deb", "ios-unsigned.ipa"))
+            manifest = release_manifest.write(folder, VERSION)
+            ios = [item for item in manifest["files"] if item["os"] == "ios"]
+            self.assertEqual([(item["name"], item["arch"], item["kind"]) for item in ios],
+                             [(f"awake-helix-signer-{VERSION}-ios-unsigned.ipa", "arm64", "ipa")])
+            self.assertEqual(release_manifest.verify(folder), [])
+
+    def test_refuses_other_versions_debug_builds_signed_ios_and_unknown_files(self) -> None:
         for extra in (
             f"awake-helix-signer-1.2.2-linux-x86_64.deb",
             f"awake-helix-signer-{VERSION}-debug-linux-x86_64.deb",
