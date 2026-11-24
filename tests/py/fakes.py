@@ -27,7 +27,9 @@ from hexbytes import HexBytes
 import signer_constants as c
 from signer_constants import attestation_typed_data
 
+# Runtime code of the fake version 2 and version 1 Diamonds.
 IMPLEMENTATION_CODE = bytes.fromhex("6080604052") + b"helix-test-implementation"
+IMPLEMENTATION_V1_CODE = bytes.fromhex("6080604052") + b"helix-test-implementation-v1"
 API = "https://anubis.sivilization.com"
 RPC = "https://rpc.anubispace.org"
 TOKEN = "tok_" + "A" * 40
@@ -44,8 +46,18 @@ def dev_constants() -> dict[str, str]:
     return {
         "implementation": c.IMPLEMENTATION,
         "implementationCodeHash": "0x" + keccak(IMPLEMENTATION_CODE).hex(),
+        "implementationV1": c.IMPLEMENTATION_V1,
+        "implementationV1CodeHash": "0x" + keccak(IMPLEMENTATION_V1_CODE).hex(),
         "attestationAddress": ATTESTOR.address,
     }
+
+
+def delegation(target: str) -> bytes:
+    """The EIP-7702 code of an account delegated to ``target``."""
+    return bytes.fromhex("ef0100" + target[2:].lower())
+
+
+HELIX_CODES = (delegation(c.IMPLEMENTATION), delegation(c.IMPLEMENTATION_V1))
 
 
 def attestation(owner: str, bot_bytes: bytes, session_key: str, *, signer: Any = ATTESTOR,
@@ -123,14 +135,14 @@ def grant_plan(owner: str, *, now: int | None = None, rules: list[tuple] | None 
     }
 
 
-def revoke_plan(owner: str, grant_id: str, kind: str = "policy") -> dict[str, Any]:
-    """A revocation plan as the website serves it."""
+def revoke_plan(owner: str, grant_id: str, kind: str = "policy", implementation: str = c.IMPLEMENTATION) -> dict[str, Any]:
+    """A revocation plan as the website serves it (naming the wallet's Diamond)."""
     return {
         "schema": c.PLAN_SCHEMA,
         "kind": "revoke",
         "chainId": 6714,
         "owner": owner,
-        "implementation": c.IMPLEMENTATION,
+        "implementation": implementation,
         "to": owner,
         "value": "0x0",
         "grantId": grant_id,
@@ -178,6 +190,7 @@ class FakeChain:
 
     def __post_init__(self) -> None:
         self.code.setdefault(c.IMPLEMENTATION.lower(), IMPLEMENTATION_CODE)
+        self.code.setdefault(c.IMPLEMENTATION_V1.lower(), IMPLEMENTATION_V1_CODE)
 
     def delegate(self, owner: str, target: str = c.IMPLEMENTATION) -> None:
         """Set a 7702 delegation."""
@@ -223,8 +236,8 @@ class FakeChain:
     def _call(self, call: dict[str, str]) -> str:
         owner, data = call["to"].lower(), call["data"].lower()
         grant = "0x" + data[10:]
-        if self.code.get(owner, b"") != bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower()):
-            return "0x"  # no Helix code runs at an account not delegated to it
+        if self.code.get(owner, b"") not in HELIX_CODES:
+            return "0x"  # no Helix code runs at an account not delegated to it (both Diamonds have the getters)
         if data.startswith(c.selector("policyGrants(bytes32)")):
             key = self.policy.get(owner, {}).get(grant, c.ZERO)
             return "0x" + encode(["address", "bytes16", "uint48", "uint48", "uint32"], [key, bytes(16), 0, 0, 0]).hex()
@@ -254,8 +267,13 @@ class FakeChain:
         data = "0x" + bytes(tx["data"]).hex()
         logs: list[dict[str, Any]] = []
         status = "0x1"
-        delegated = self.code.get(to, b"") == bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower())
-        if to == sender and delegated and data.startswith(c.INSTALL_SELECTOR):
+        delegated = self.code.get(to, b"") in HELIX_CODES
+        on_v1 = self.code.get(to, b"") == delegation(c.IMPLEMENTATION_V1)
+        if to == sender and on_v1 and data.startswith(c.INSTALL_SELECTOR) and any(
+            rule[0] >= 10 for rule in decode(list(c.INSTALL_TYPES), bytes.fromhex(data[10:]))[2]
+        ):
+            status = "0x0"  # the version 1 RuleKind enum ends at 9
+        elif to == sender and delegated and data.startswith(c.INSTALL_SELECTOR):
             grant_id, grant, _ = decode(list(c.INSTALL_TYPES), bytes.fromhex(data[10:]))
             key = grant[0].lower()
             self.policy.setdefault(to, {})["0x" + grant_id.hex()] = key

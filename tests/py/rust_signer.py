@@ -107,9 +107,12 @@ def verify_grant_plan(plan: Any, constants: dict[str, Any] | str | None = None, 
     return verified
 
 
-def verify_revoke_plan(plan: Any, constants: dict[str, Any] | str | None = None) -> SimpleNamespace:
-    """Verify a revocation plan."""
-    answer = _one({"op": "verify_revoke", "plan": plan, "constants": constants, "rpc": "", "api": None})
+def verify_revoke_plan(plan: Any, constants: dict[str, Any] | str | None = None, state: str | None = None) -> SimpleNamespace:
+    """Verify a revocation plan; ``state`` (``"v1"``, ``"v2"`` or ``"plain"``) also binds it to the wallet's Diamond."""
+    operation = {"op": "verify_revoke", "plan": plan, "constants": constants, "rpc": "", "api": None}
+    if state is not None:
+        operation["state"] = state
+    answer = _one(operation)
     verified = _namespace(answer["plan"])
     verified.summary = answer["summary"]
     return verified
@@ -130,7 +133,10 @@ def constants(spec: dict[str, Any] | str | None = None) -> dict[str, Any]:
     return _one({"op": "dev_constants", "constants": spec})
 
 
-PINNED_FIELDS = ("implementation", "implementationCodeHash", "entryPoint", "legacySessionKey", "attestationAddress")
+PINNED_FIELDS = (
+    "implementation", "implementationCodeHash", "implementationV1", "implementationV1CodeHash", "entryPoint",
+    "legacySessionKey", "attestationAddress",
+)
 
 
 def pinned_with(**changes: str) -> dict[str, Any]:

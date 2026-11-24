@@ -41,6 +41,16 @@ VERSION = re.search(r'(?m)^version = "([^"]+)"', (harness.ROOT / "Cargo.toml").r
 MNEMONIC = "test test test test test test test test test test test junk"
 MNEMONIC_ADDRESSES = ("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
 GRANT_A, GRANT_B, GRANT_C = "0x" + "a1" * 32, "0x" + "b2" * 32, "0x" + "c3" * 32
+# An Origin grant (version 2 Diamond): New Turbo 4x, Energy Staking, Burn Bond, the Origin turbine.
+ORIGIN_RULES = [
+    fakes.rule(0, c.DAI, 100 * 10**18, counterparty=c.NEW_TURBO_4X),
+    fakes.rule(10, c.NEW_TURBO_4X, 100 * 10**18, price=125 * 10**8, deadline=600),  # 12.5 LGNS per DAI
+    fakes.rule(11, c.NEW_TURBO_4X, 300 * 10**9, daily=600 * 10**9, secondary=20 * 10**18, price=95 * 10**16, deadline=600),
+    fakes.rule(12, c.NEW_TURBO_4X, 300 * 10**9, price=4 * 10**26, deadline=600),  # 0.4 DAI per LGNS
+    fakes.rule(16, c.ENERGY_STAKING, 50 * 10**9),
+    fakes.rule(18, c.BURN_BOND, 1, daily=24),
+    fakes.rule(25, c.ORIGIN_TURBINE, 10 * 10**18, deadline=300),
+]
 
 
 @unittest.skipUnless(BIN.is_file(), f"{BIN} not built (cargo build --release -p helix-signer-cli)")
@@ -108,6 +118,71 @@ class SignTests(CliCase):
         self.assertEqual(self.chain.sent[-1]["type"], 2)
         self.assertEqual(self.chain.sent[-1]["authorities"], [])
         self.assertIn("ordinary self-call", result.stdout)
+
+    def test_version_1_wallet_moves_to_version_2_with_the_grant(self) -> None:
+        owner = self.owner.lower()
+        self.chain.delegate(owner, c.IMPLEMENTATION_V1)
+        kept = "0x" + "0a" * 32
+        self.chain.policy[owner] = {kept: "0x" + "55" * 20}
+        plan = fakes.grant_plan(self.owner, rules=ORIGIN_RULES)
+        self.site.plans[fakes.TOKEN] = plan
+        result = self.sign("--private-key", lines=[self.world.private_key, "AUTHORIZE"])
+        self.assertEqual(result.code, 0, result)
+        sent = self.chain.sent[-1]
+        self.assertEqual((sent["type"], sent["tx"]["nonce"]), (4, 3))
+        self.assertEqual(sent["authorities"], [{"authority": owner, "nonce": 4, "address": c.IMPLEMENTATION.lower()}])
+        self.assertEqual(self.chain.code[owner], fakes.delegation(c.IMPLEMENTATION))
+        self.assertEqual(self.chain.policy[owner][kept], "0x" + "55" * 20)
+        self.assertEqual(self.chain.policy[owner][plan["grantId"]], fakes.SESSION_KEY.lower())
+        for expected in ("move the account from the version 1 to the version 2 Helix Diamond and install the grant",
+                         "Moves from:  " + c.IMPLEMENTATION_V1, "moved to the version 2 Diamond (its grants are kept)"):
+            self.assertIn(expected, result.stdout)
+
+    def test_origin_grant_summary(self) -> None:
+        self.chain.delegate(self.owner)
+        self.site.plans[fakes.TOKEN] = fakes.grant_plan(self.owner, rules=ORIGIN_RULES)
+        result = self.sign("--private-key", lines=[self.world.private_key, "AUTHORIZE"])
+        self.assertEqual(result.code, 0, result)
+        self.assertEqual(self.chain.sent[-1]["type"], 2)
+        for expected in ("every target is on the pinned HELIX and Origin allow-list", "spender: New Turbo 4x",
+                         "2. participate on New Turbo 4x", "price floor: at least 12.5 LGNS per 1 DAI",
+                         "DAI back: at least 0.95 DAI back per 1 DAI paid", "activation DAI: at most 20 DAI per call",
+                         "limit: 300 LGNS per call, 600 LGNS per UTC day", "price floor: at least 0.4 DAI per 1 LGNS",
+                         "5. claimInterest on Energy Staking", "6. claim on Burn Bond", "limit: at most 24 calls per UTC day",
+                         "7. silence on Origin Turbine", "recipient: always your own account"):
+            self.assertIn(expected, result.stdout)
+
+    def test_origin_rules_the_contract_would_refuse_are_refused(self) -> None:
+        def changed(index: int, **fields: int | str) -> list[tuple]:
+            rules = [list(item) for item in ORIGIN_RULES]
+            positions = {"target": 1, "token_in": 2, "maximum": 4, "secondary": 5, "daily": 6, "price": 7, "deadline": 8}
+            for name, value in fields.items():
+                rules[index][positions[name]] = value
+            return [tuple(item) for item in rules]
+
+        cases = [
+            (changed(1, target=c.LEDGER), "Rule participate (kind 10) on PowerLedger"),
+            (changed(4, token_in=c.LGNS), "is not on the Origin allow-list"),
+            (changed(1, price=0), "Rule participate (kind 10) has no price floor."),
+            (changed(3, deadline=0), "Rule sell (kind 12) has an unbounded deadline."),
+            (changed(2, secondary=0), "Activation rule activate (kind 11) has no DAI cap."),
+            (changed(5, maximum=2, daily=4), "Rule claim (kind 18) counts calls"),
+        ]
+        for rules, fragment in cases:
+            with self.subTest(fragment=fragment):
+                self.world = self._fresh()
+                self.chain, self.site = self.world.chain, self.world.site
+                self.site.plans[fakes.TOKEN] = fakes.grant_plan(self.owner, rules=rules)
+                result = self.sign("--private-key", lines=[self.world.private_key])
+                self.assertEqual(result.code, 2, result)
+                self.assertIn(fragment, result.stdout)
+                self.assertEqual(self.chain.sent, [])
+        self.world = self._fresh()
+        self.chain, self.site = self.world.chain, self.world.site
+        self.site.plans[fakes.TOKEN] = {**fakes.grant_plan(self.owner), "implementation": c.IMPLEMENTATION_V1}
+        result = self.sign("--private-key", lines=[self.world.private_key])
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("that is the version 1 Helix7702 Diamond", result.stdout)
 
     def test_refusals_sign_nothing(self) -> None:
         cases = [
@@ -394,6 +469,28 @@ class RevokeTests(CliCase):
         self.assertNotIn(grant, self.chain.policy[owner])
         self.assertEqual(self.chain.code[owner], bytes.fromhex("ef0100" + c.IMPLEMENTATION[2:].lower()))
         self.assertIn("delegated to Helix again and the grant is revoked", result.stdout)
+
+    def test_revoke_on_version_1_stays_on_version_1(self) -> None:
+        owner, grant = self.owner.lower(), "0x" + "e1" * 32
+        self.chain.delegate(owner, c.IMPLEMENTATION_V1)
+        self.chain.policy[owner] = {grant: fakes.SESSION_KEY.lower(), "0x" + "e2" * 32: fakes.SESSION_KEY.lower()}
+        self.site.plans[fakes.TOKEN] = fakes.revoke_plan(self.owner, grant, implementation=c.IMPLEMENTATION_V1)
+        result = self.cli(["revoke", "--plan", fakes.TOKEN, *self.world.api, *self.world.network, *self.keystore()], [self.world.password, "REVOKE"])
+        self.assertEqual(result.code, 0, result)
+        self.assertIn("Transaction: ordinary self-call revokePolicyGrant(bytes32)", result.stdout)
+        self.assertEqual((self.chain.sent[-1]["type"], self.chain.sent[-1]["authorities"]), (2, []))
+        self.assertNotIn(grant, self.chain.policy[owner])
+        # Offline too; the wallet stays on version 1.
+        result = self.cli(["revoke", "--grant", "0x" + "e2" * 32, "--owner", self.owner, *self.world.network, "--private-key"], [self.world.private_key, "REVOKE"])
+        self.assertEqual(result.code, 0, result)
+        self.assertEqual((self.chain.sent[-1]["type"], self.chain.sent[-1]["authorities"]), (2, []))
+        self.assertEqual(self.chain.code[owner], fakes.delegation(c.IMPLEMENTATION_V1))
+        # A plan naming the version 2 Diamond for this wallet is refused.
+        self.chain.policy[owner]["0x" + "e3" * 32] = fakes.SESSION_KEY.lower()
+        self.site.plans["tok_" + "B" * 40] = fakes.revoke_plan(self.owner, "0x" + "e3" * 32)
+        result = self.cli(["revoke", "--plan", "tok_" + "B" * 40, *self.world.api, *self.world.network, "--private-key"], [self.world.private_key])
+        self.assertEqual(result.code, 2, result)
+        self.assertIn(f"Wrong delegate {c.IMPLEMENTATION}: this account's grants run on the Helix7702 implementation {c.IMPLEMENTATION_V1}", result.stdout)
 
     def test_revoke_refuses_a_foreign_delegation(self) -> None:
         owner, grant = self.owner.lower(), "0x" + "d1" * 32
