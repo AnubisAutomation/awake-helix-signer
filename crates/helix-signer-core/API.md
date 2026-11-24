@@ -46,7 +46,7 @@ shown. Runnable examples of every call are in `tests/flows.rs` and
 ## Version and constants
 
 ```rust
-pub const VERSION: &str;                         // "0.5.2"
+pub const VERSION: &str;                         // "0.6.0"
 pub const CHAIN_ID: u64;                         // 6714
 pub const DEFAULT_RPC: &str;                     // https://rpc.anubispace.org
 pub const DEFAULT_API: &str;                     // https://anubis.sivilization.com
@@ -54,8 +54,11 @@ pub fn production() -> Constants;                // pinned values; attestation a
                                                  // attestation_address.txt at build time
 pub struct Constants {                           // Clone, Debug, PartialEq, Serialize
     pub chain_id: u64,
-    pub implementation: Address,
+    pub implementation: Address,                 // the version 2 Diamond: every grant installs with it
     pub implementation_code_hash: Option<String>,// lowercase 0x hash; None = not checked (dev only)
+    pub implementation_v1: Address,              // the version 1 Diamond (JSON "implementationV1"):
+                                                 // revocations in place; a grant moves the wallet to v2
+    pub implementation_v1_code_hash: Option<String>, // "implementationV1CodeHash"
     pub entry_point: Address,
     pub attestation_address: Address,
     pub legacy_session_key: Address,
@@ -64,8 +67,12 @@ pub struct Constants {                           // Clone, Debug, PartialEq, Ser
 impl Constants { pub fn with_overrides(&self, values: &serde_json::Value) -> Result<Constants>; }
 pub fn load_constants(dev_file: Option<&Path>, rpc_url: &str) -> Result<Constants>;
         // --dev-constants FILE: refused unless rpc_url is loopback
-pub mod constants;   // RULE_ALLOWLIST, RULE_METHODS, MAX_* bounds, GrantKind, contract_name(),
-                     // install_selector(), revoke_selector(kind), policy_installed_topic(), ...
+        // --dev-constants: implementationV1 / implementationV1CodeHash are optional (default: the
+        // pinned version 1 Diamond and its hash; named without a hash: not checked)
+pub mod constants;   // IMPLEMENTATION (v2), IMPLEMENTATION_V1, RULE_ALLOWLIST, RULE_METHODS (27 kinds:
+                     // HELIX 0-9, Origin 10-26), RULE_UNITS, SWAP_KINDS / DEADLINE_KINDS / SECONDARY_KINDS /
+                     // COUNTED_KINDS, MAX_* bounds, GrantKind, contract_name(), install_selector(),
+                     // revoke_selector(kind), policy_installed_topic(), ...
 ```
 
 `build.rs` reads `attestation_address.txt` at the repository root (or
@@ -154,15 +161,23 @@ pub fn keys::is_password_error(error: &Error) -> bool;   // the CLI retries a wr
 pub struct Rule { pub kind: u8, pub target: Address, pub token_in: Address, pub counterparty: Address,
                   pub max_amount: U256, pub max_secondary: U256, pub max_daily: U256,
                   pub min_out_per_in_wad: U256, pub max_deadline_delay: u64 }
-impl Rule { pub fn method(&self) -> &'static str; pub fn unit(&self) -> (&'static str, u32); }
+impl Rule { pub fn method(&self) -> &'static str;   // names repeat: participate 1/10, activate 5/11, claim 14/18
+            pub fn label(&self) -> String;       // "participate (kind 10)" for an Origin kind, else the method
+            pub fn unit(&self) -> (&'static str, u32);   // rule_kinds.py: DAI 18, LGNS 9, "calls" 0, ...
+            pub fn is_origin(&self) -> bool; pub fn is_counted(&self) -> bool;
+            pub fn floor_tokens(&self) -> Option<(Address, Address)>; }   // kinds 3, 4, 10, 11, 12
 pub struct GrantPlan { pub owner: Address, pub grant_id: String, pub session_key: Address,
                        pub bot_id: String, pub valid_after: u64, pub valid_until: u64,
                        pub remaining_calls: u64, pub rules: Vec<Rule>, pub data: String,
                        pub implementation: Address, pub plan: Value /* raw: bounds, bot, customization */ }
 pub struct RevokePlan { pub owner: Address, pub grant_id: String, pub grant_kind: GrantKind,
-                        pub data: String, pub implementation: Address, pub plan: Value }
+                        pub data: String, pub implementation: Address /* the wallet's Diamond, v1 or v2 */,
+                        pub named_implementation: Option<Address> /* not serialized */, pub plan: Value }
 pub fn verify_grant_plan(plan: &Value, constants: &Constants, now: Option<u64>) -> Result<GrantPlan>;
-pub fn verify_revoke_plan(plan: &Value, constants: &Constants) -> Result<RevokePlan>;
+        // names the version 2 Diamond; rules checked like Helix7702AccountV2 (floors, deadlines, the
+        // activation DAI cap, counted kinds); the website's preview matched by kind, method and target
+pub fn verify_revoke_plan(plan: &Value, constants: &Constants) -> Result<RevokePlan>;   // v1 or v2 named
+pub fn bind_revoke_delegate(plan: &mut RevokePlan, delegate: Address) -> Result<()>;   // the wallet's own
 pub fn verify_attestation(attestation: Option<&Value>, owner: &Address, bot: &[u8; 16],
                           session_key: &Address, constants: &Constants) -> Result<()>;
 pub fn attestation_digest(chain_id: u64, owner: &Address, bot: &[u8; 16], session_key: &Address) -> [u8; 32];
@@ -182,17 +197,22 @@ pub struct Summary {
     pub owner: Address, pub transaction: String, pub balance: String,   // "1 DAI"
     pub grant: Option<GrantSummary>, pub revoke: Option<RevokeSummary>,
 }
-pub struct GrantSummary { pub delegates: bool /* type-4 */, pub delegate: Address, pub code_hash_verified: bool,
+pub struct GrantSummary { pub delegates: bool /* type-4 */, pub delegate: Address /* v2 */,
+    pub moves_from: Option<Address> /* the v1 Diamond the same tx moves the wallet from */,
+    pub origin_rules: bool, pub code_hash_verified: bool,
     pub session_key: Address, pub bot_script: Option<String>, pub bot_id: String, pub grant_id: String,
     pub valid_after: u64, pub valid_after_text: String, pub valid_until: u64, pub valid_until_text: String,
     pub remaining_calls: u64, pub rules: Vec<RuleSummary>, pub customized: Vec<String> }
 pub struct RuleSummary { pub index: usize /* 1-based, for --cap */, pub kind: u8, pub method: String,
     pub target: Address, pub target_name: String, pub spender: Option<Address>, pub swap: Option<SwapSummary>,
+    pub floor: Option<SwapSummary> /* kinds 10-12: LGNS per DAI, DAI back per DAI paid, DAI per LGNS */,
     pub unit: String, pub decimals: u32, pub max_per_call: String, pub max_per_day: String,
-    pub activation_dai: Option<String>, pub deadline_seconds: Option<u64> }
+    pub counted: bool /* caps count calls */, pub activation_dai: Option<String> /* kinds 5 and 11 */,
+    pub deadline_seconds: Option<u64>, pub pays_owner: bool /* kinds 25, 26 */ }
 pub struct SwapSummary { pub token_in, pub token_in_name, pub token_out, pub token_out_name, pub price_floor: String }
 pub struct RevokeSummary { pub method: String, pub grant_id: String, pub grant_kind: GrantKind, pub delegation: String,
-                           pub redelegates: bool /* plain account: the type-4 tx re-delegates */, pub delegate: Address }
+                           pub redelegates: bool /* plain account: the type-4 tx re-delegates to v2 */,
+                           pub delegate: Address /* the Diamond the wallet uses: v1 stays v1 */ }
 impl Summary { pub fn text(&self) -> String; pub fn lines(&self) -> Vec<String>; }  // = Python summary.py
 pub fn when(seconds: u64) -> String;             // "2026-11-10 12:00:00 UTC (local 2026-11-10 13:00:00 CET)"
 pub mod summary { grant_summary(), revoke_summary(), dai(), named() }
@@ -212,7 +232,8 @@ pub mod custom {
     pub fn expiry_parts(seconds: i64, zone: &str) -> Result<(String, String)>;   // back into the fields
     pub fn parse_calls(text: &str) -> Result<u64>;
     pub type Cap = (usize, Option<String>, Option<String>);
-    pub fn parse_cap(text: &str, rules: &[Rule]) -> Result<Cap>;                 // "1=15,40", "approve=15", "2=,40"
+    pub fn parse_cap(text: &str, rules: &[Rule]) -> Result<Cap>;                 // "1=15,40", "approve=15", "2=,40",
+        // "claim@18=,4" / "claimInterest@Energy Staking=5" (method@kind or method@contract when names repeat)
     pub fn base_units(text: &str, decimals: u32, label: &str) -> Result<String>; // exact digits
     pub fn request_of(plan: &GrantPlan) -> CustomizeRequest;
     pub fn with_changes(plan: &GrantPlan, expires: Option<i64>, calls: Option<u64>, caps: &[Cap]) -> Result<CustomizeRequest>;
@@ -249,10 +270,12 @@ pub fn execute_revoke(session: &Session, material: KeyMaterial, log: Log) -> Res
         // consume and wipe the key. Plain EOA: one type-4 tx (authorization nonce = account nonce + 1),
         // for an install and for revoking a dormant grant still stored in an un-delegated account (the
         // grant is found with eth_getStorageAt at Helix7702Account's slots; the tx re-delegates, then
-        // revokes); delegated to the pinned delegate: type-2 self-call; delegated elsewhere / contract: refused.
+        // revokes), always authorizing the version 2 Diamond; delegated to the version 1 Diamond: an install
+        // is the same type-4 tx moving the wallet to v2 (grants kept), a revocation a type-2 self-call on v1
+        // (whose code hash is checked); delegated to v2: type-2 self-call; elsewhere / contract: refused.
         // Gas: eth_estimateGas with authorizationList, else with a delegation state override, else a
         // fixed fallback; the DAI balance must cover gas x maxFeePerGas. Then receipt, on-chain checks
-        // (code = 0xef0100||delegate after installs and revocations, PolicyGrantInstalled, policyGrants /
+        // (code = 0xef0100||v2 after installs, v1 or v2 after revocations, PolicyGrantInstalled, policyGrants /
         // key cleared), report (3 tries).
 pub fn flow::revoke_call_plan(call: &Value, owner: &Address, grant_id: &str, constants: &Constants) -> Result<RevokePlan>;
 pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, constants: &Constants,
@@ -375,7 +398,7 @@ pub mod icon { pub fn png(size: u32) -> Vec<u8>; pub fn ico(sizes: &[u32]) -> Ve
 
 ## Differences from the Python signer (deliberate)
 
-* The version is 0.5.2.
+* The version is 0.6.0.
 * `Local` in an expiry uses the system time zone with its DST rules for that
   date (Python used the current UTC offset for every date).
 * Inputs on which the Python signer crashed with a traceback (a plan

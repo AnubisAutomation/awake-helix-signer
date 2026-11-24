@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.6.0
+
+- The pinned delegate is the version 2 Helix7702 Diamond
+  `0xA37eBF54868c76B52A35741859d9835609d48695` (runtime code hash
+  `0x59e8a793…64c9f2`, same EntryPoint). Its account facet is version 1 with
+  the Origin rule kinds 10-26 appended; storage, structs and selectors are
+  unchanged, so a wallet keeps its grants when it moves.
+- Wallets on the version 1 Diamond (`0xdaFCb6c6…8ff56A`, still pinned with its
+  code hash as `IMPLEMENTATION_V1`):
+  - a new grant is one type-4 transaction that re-delegates the wallet to
+    version 2 and installs the grant; the summary says "move the account from
+    the version 1 to the version 2 Helix Diamond" and "Moves from: …";
+  - a revocation is a plain self-call on version 1 (its code hash is checked)
+    and leaves the delegation as it is.
+  A plain wallet is delegated to version 2 (grants, and revocations of a
+  dormant grant). After a grant the wallet must be on version 2; after a
+  revocation on version 1 or 2.
+- Grant plans must name the version 2 Diamond (naming version 1 is refused
+  with its own message); revocation plans may name either, and must name the
+  one the wallet uses. `--dev-constants` takes `implementationV1` and
+  `implementationV1CodeHash`.
+- Origin (origindefi) rules: New Turbo 2.5x / 4x / Community participate,
+  activate, sell and stakeAgain; Community Distributor claim; Long Staking
+  360 / 600 and Energy Staking stake, claimInterest, unstakePrincipal and
+  turbineExtraInterest; Burn Fixed and Burn Bond claim / claimAll, Burn Bond
+  depositDAI / depositLGNS, Energy Burner burn, Burn Bond Ranking Reward
+  claimReward, Origin Turbine silence / redeemSilence, and their DAI / LGNS
+  approvals. The allow-list is the version 1 list plus exactly the website's
+  `ORIGIN_RULE_ALLOWLIST`. Each rule is checked like the contract: price
+  floor and deadline (1 s to 1 hour) for participate, activate and sell,
+  deadline only for silence, the activation DAI cap for activate, one call
+  per call for the claim kinds (their daily cap counts calls), no token or
+  counterparty.
+- Method names repeat across kinds (participate 1/10, activate 5/11, claim
+  14/18): the website's rule preview is matched by kind as well, messages
+  name the kind ("participate (kind 10)"), and `--cap` accepts
+  `method@kind` or `method@contract` (`claim@18=,4`).
+- The summary (command line and app, six languages) shows units per kind
+  (LGNS with 9 decimals, "at most N calls per UTC day" for the claim kinds),
+  the Origin contract names, the floors ("at least 10 LGNS per 1 DAI",
+  "at least 0.9 DAI back per 1 DAI paid", "at least 0.5 DAI per 1 LGNS"),
+  the activation DAI cap of New Turbo activate, and that silence and
+  redeemSilence always pay your own account. The app's editor names each
+  rule with its contract and keeps a claim rule's per-call cap at 1.
+
 ## 0.5.4
 
 - Website calls wait at most 10 s to connect and then 30 s for the answer

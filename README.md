@@ -21,16 +21,19 @@ your own device, after checking every value itself.
 - **The website is not trusted.** A plan from the website is signed only when
   it matches constants compiled into the program
   ([`constants.rs`](crates/helix-signer-core/src/constants.rs)): chain 6714,
-  the pinned EIP-7702 delegate and its runtime code hash, the EntryPoint, an
-  allow-list of HELIX contracts and methods, and bounds on lifetime (90 days),
+  the pinned EIP-7702 delegates and their runtime code hashes (the version 2
+  Diamond for every grant; the version 1 Diamond only for wallets still on
+  it), the EntryPoint, an allow-list of HELIX and Origin contracts and
+  methods, and bounds on lifetime (90 days),
   call count and caps. The calldata is decoded and re-encoded byte for byte.
 - **Session keys are attested.** Each bot's session key must carry an EIP-712
   attestation recovering to the platform attestation address pinned at build
   time ([`attestation_address.txt`](attestation_address.txt)); release builds
   refuse the placeholder.
 - **What it signs:** one EIP-7702 type-4 transaction (delegation plus the
-  `installPolicyGrant` self-call) or a plain self-call when already delegated
-  to Helix, revocations (`revokePolicyGrant` / `revokeGrant`), and a
+  `installPolicyGrant` self-call; a wallet on the version 1 Diamond moves to
+  version 2 the same way and keeps its grants) or a plain self-call when
+  already delegated to version 2, revocations (`revokePolicyGrant` / `revokeGrant`), and a
   `personal_sign` login message for the website's *My grants* list. Each
   authorization shows a summary decoded from the calldata and needs you to
   type `AUTHORIZE` (`REVOKE` for revocations).
