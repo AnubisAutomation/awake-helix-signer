@@ -272,8 +272,20 @@ fn rule_index(name: &str, rules: &[Rule]) -> Result<usize> {
         }
         return Err(Error::plan(format!("There is no rule {text}: this grant has rules 1 to {}.", rules.len())));
     }
-    let matches: Vec<usize> =
-        rules.iter().enumerate().filter(|(_, rule)| rule.method().to_lowercase() == text.to_lowercase()).map(|(index, _)| index).collect();
+    // ``method`` or ``method@qualifier``: method names repeat across kinds
+    // (participate 1/10, activate 5/11, claim 14/18) and targets, so the
+    // qualifier names the kind (``claim@18``), the target's pinned name
+    // (``claimInterest@Energy Staking``) or its address.
+    let (method, qualifier) = match text.split_once('@') {
+        Some((method, qualifier)) => (method.trim(), Some(qualifier.trim())),
+        None => (text, None),
+    };
+    let matches: Vec<usize> = rules
+        .iter()
+        .enumerate()
+        .filter(|(_, rule)| rule.method().to_lowercase() == method.to_lowercase() && qualifier.is_none_or(|qualifier| qualifies(rule, qualifier)))
+        .map(|(index, _)| index)
+        .collect();
     match matches.len() {
         1 => Ok(matches[0]),
         0 => Err(Error::plan(format!("No rule is called {}; use a rule number from the summary.", str_repr(text)))),
@@ -284,10 +296,25 @@ fn rule_index(name: &str, rules: &[Rule]) -> Result<usize> {
     }
 }
 
+/// Whether a ``--cap`` qualifier (after ``@``) names this rule's kind, its
+/// target's pinned name or its target address.
+fn qualifies(rule: &Rule, qualifier: &str) -> bool {
+    if all_digits(qualifier, 1, 3) {
+        return qualifier.parse::<u8>().is_ok_and(|kind| kind == rule.kind);
+    }
+    if qualifier.starts_with("0x") || qualifier.starts_with("0X") {
+        return crate::address::Address::parse(qualifier).is_some_and(|target| target == rule.target);
+    }
+    let name = crate::constants::contract_name(&rule.target.to_checksum());
+    !name.is_empty() && name.to_lowercase() == qualifier.to_lowercase()
+}
+
 /// A parsed ``--cap``: rule index, per-call text, per-day text.
 pub type Cap = (usize, Option<String>, Option<String>);
 
-/// Parse ``--cap <rule>=<per_call>,<per_day>`` (``1=15,40``, ``approve=15``, ``2=,40``).
+/// Parse ``--cap <rule>=<per_call>,<per_day>`` (``1=15,40``, ``approve=15``,
+/// ``2=,40``, ``claim@18=,4``). A rule is its number in the summary, its
+/// method name, or ``method@kind``/``method@contract`` when names repeat.
 pub fn parse_cap(text: &str, rules: &[Rule]) -> Result<Cap> {
     let (rule, values) = match text.split_once('=') {
         Some(split) => split,
@@ -337,10 +364,13 @@ pub fn with_changes(plan: &GrantPlan, expires: Option<i64>, calls: Option<u64>, 
     for (index, per_call, per_day) in caps {
         let rule = &plan.rules[*index];
         let decimals = rule.unit().1;
-        let label = format!("Rule {} ({})", index + 1, rule.method());
+        let label = format!("Rule {} ({})", index + 1, rule.label());
         let entry = &mut request.rules[*index];
         if let Some(per_call) = per_call {
-            base_units(per_call, decimals, &format!("{label}: the per-call cap"))?;
+            let units = base_units(per_call, decimals, &format!("{label}: the per-call cap"))?;
+            if rule.is_counted() && units != "1" {
+                return Err(Error::plan(format!("{label} counts calls: its per-call cap is always 1; change its per-day cap (calls per UTC day).")));
+            }
             entry.max_per_call = Some(per_call.clone());
         }
         if let Some(per_day) = per_day {

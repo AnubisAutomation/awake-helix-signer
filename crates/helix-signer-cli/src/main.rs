@@ -87,7 +87,8 @@ enum Command {
         /// New total number of bot operations the grant allows.
         #[arg(long, value_name = "N")]
         calls: Option<String>,
-        /// New caps of one rule (its number in the summary, or its method name), e.g. 1=15,40. Repeatable.
+        /// New caps of one rule (its number in the summary, its method name, or method@kind / method@contract
+        /// when names repeat, e.g. claim@18), e.g. 1=15,40. Repeatable.
         #[arg(long, value_name = "RULE=PER_CALL,PER_DAY")]
         cap: Vec<String>,
         #[command(flatten)]
@@ -807,11 +808,12 @@ fn selftest(console: &Console) -> u8 {
         .unwrap_or_default();
     let ok = words && key == "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
     console.out(&format!(
-        "awake-helix-signer {} selftest {}: chain {}, delegate {}, attestation {}, constants {}",
+        "awake-helix-signer {} selftest {}: chain {}, delegate {} (version 1 {}), attestation {}, constants {}",
         helix_signer_core::VERSION,
         if ok { "ok" } else { "FAILED" },
         constants.chain_id,
         constants.implementation,
+        constants.implementation_v1,
         constants.attestation_address,
         companion::constants_hash(&constants)
     ));

@@ -19,7 +19,10 @@ use serde_json::{json, Map, Value};
 pub const API: &str = "http://127.0.0.1:18000";
 pub const RPC: &str = "http://127.0.0.1:18545/rpc";
 pub const TOKEN: &str = "tok_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+/// Runtime code of the fake version 2 Diamond (``c::IMPLEMENTATION``).
 pub const IMPLEMENTATION_CODE: &[u8] = b"\x60\x80\x60\x40\x52helix-test-implementation";
+/// Runtime code of the fake version 1 Diamond (``c::IMPLEMENTATION_V1``).
+pub const IMPLEMENTATION_V1_CODE: &[u8] = b"\x60\x80\x60\x40\x52helix-test-implementation-v1";
 
 pub fn key(label: &str) -> KeyMaterial {
     KeyMaterial::from_private_key(&hex::encode(keccak(label.as_bytes()))).unwrap()
@@ -38,6 +41,8 @@ pub fn constants() -> Constants {
         .with_overrides(&json!({
             "implementation": c::IMPLEMENTATION,
             "implementationCodeHash": hex0x(&keccak(IMPLEMENTATION_CODE)),
+            "implementationV1": c::IMPLEMENTATION_V1,
+            "implementationV1CodeHash": hex0x(&keccak(IMPLEMENTATION_V1_CODE)),
             "attestationAddress": attestor().address().to_checksum(),
         }))
         .unwrap()
@@ -70,6 +75,34 @@ pub fn dai_power() -> Vec<RawRule> {
     vec![approve, rule(1, c::LEDGER, 10 * wad)]
 }
 
+/// A New Turbo, distributor, burn and Origin turbine grant (the Origin kinds
+/// of the version 2 account, within the bounds the contract checks).
+pub fn origin_rules() -> Vec<RawRule> {
+    let wad = 1_000_000_000_000_000_000u128;
+    let lgns = 1_000_000_000u128;
+    let mut approve = rule(0, c::DAI, 100 * wad);
+    approve.counterparty = Address::constant(c::NEW_TURBO_25X);
+    let mut participate = rule(10, c::NEW_TURBO_25X, 100 * wad);
+    participate.min_out_per_in_wad = U256::from(10 * lgns); // 10 LGNS per DAI
+    participate.max_deadline_delay = 600;
+    let mut activate = rule(11, c::NEW_TURBO_25X, 500 * lgns);
+    activate.max_secondary = U256::from(50 * wad);
+    activate.min_out_per_in_wad = U256::from(9 * wad / 10); // 0.9 DAI back per DAI paid
+    activate.max_deadline_delay = 600;
+    let mut sell = rule(12, c::NEW_TURBO_25X, 500 * lgns);
+    sell.min_out_per_in_wad = U256::from(5u128) * U256::from(10u128).pow(U256::from(26)); // 0.5 DAI per LGNS
+    sell.max_deadline_delay = 600;
+    let mut claim = rule(14, c::COMMUNITY_DISTRIBUTOR, 1);
+    claim.max_daily = U256::from(2);
+    let mut claim_index = rule(18, c::BURN_FIXED, 1);
+    claim_index.max_daily = U256::from(24);
+    let mut silence = rule(25, c::ORIGIN_TURBINE, 10 * wad);
+    silence.max_deadline_delay = 300;
+    let mut redeem = rule(26, c::ORIGIN_TURBINE, 1);
+    redeem.max_daily = U256::from(4);
+    vec![approve, participate, activate, sell, claim, claim_index, silence, redeem]
+}
+
 pub fn attestation(owner: &Address, bot: &[u8; 16], session: &Address, signer: &KeyMaterial) -> Value {
     let digest = attestation_digest(6714, owner, bot, session);
     let signature = signer.sign_digest(&digest).unwrap();
@@ -92,7 +125,7 @@ pub fn grant_plan(owner: &Address, rules: Vec<RawRule>, valid_seconds: u64, call
     let preview: Vec<Value> = rules
         .iter()
         .map(|rule| {
-            let signature = c::RULE_METHODS[rule.kind as usize];
+            let signature = c::RULE_METHODS.get(rule.kind as usize).copied().unwrap_or("unknown()");
             json!({"kind": rule.kind, "method": &signature[..signature.find('(').unwrap()], "target": rule.target.to_checksum(), "counterparty": rule.counterparty.to_checksum()})
         })
         .collect();
@@ -108,11 +141,28 @@ pub fn grant_plan(owner: &Address, rules: Vec<RawRule>, valid_seconds: u64, call
 }
 
 pub fn revoke_plan(owner: &Address, grant_id: &str, kind: GrantKind) -> Value {
+    revoke_plan_naming(owner, grant_id, kind, c::IMPLEMENTATION)
+}
+
+/// A revoke plan naming a Diamond (the website names the wallet's own).
+pub fn revoke_plan_naming(owner: &Address, grant_id: &str, kind: GrantKind, implementation: &str) -> Value {
     json!({
         "schema": "awake-helix-signer-plan/1", "kind": "revoke", "chainId": 6714, "owner": owner.to_checksum(),
-        "implementation": c::IMPLEMENTATION, "to": owner.to_checksum(), "value": "0x0", "grantId": grant_id,
+        "implementation": implementation, "to": owner.to_checksum(), "value": "0x0", "grantId": grant_id,
         "grantKind": kind.as_str(), "data": format!("{}{}", c::revoke_selector(kind), &grant_id[2..]),
     })
+}
+
+/// The EIP-7702 delegation code of an account delegated to ``target``.
+pub fn delegation(target: &str) -> Vec<u8> {
+    let mut code = hex::decode("ef0100").unwrap();
+    code.extend_from_slice(&Address::constant(target).0);
+    code
+}
+
+/// Whether the code is a delegation to one of the two Helix Diamonds.
+pub fn helix_code(code: Option<&Vec<u8>>) -> bool {
+    code.is_some_and(|code| *code == delegation(c::IMPLEMENTATION) || *code == delegation(c::IMPLEMENTATION_V1))
 }
 
 // -- RLP decoding of the signed transactions ----------------------------------
@@ -296,6 +346,7 @@ impl Fake {
     pub fn new() -> Fake {
         let mut state = State { chain_id: 6714, estimate_with_authorization: true, estimate_with_override: true, block: 100, report_status: 200, login_domain: "127.0.0.1:18000".into(), ..State::default() };
         state.code.insert(Address::constant(c::IMPLEMENTATION), IMPLEMENTATION_CODE.to_vec());
+        state.code.insert(Address::constant(c::IMPLEMENTATION_V1), IMPLEMENTATION_V1_CODE.to_vec());
         Fake { state: Arc::new(Mutex::new(state)) }
     }
 
@@ -355,10 +406,9 @@ impl Fake {
             }
             "eth_call" => {
                 let owner = Address::parse(params[0]["to"].as_str().unwrap_or_default()).unwrap_or_default();
-                let mut pinned = hex::decode("ef0100").unwrap();
-                pinned.extend_from_slice(&Address::constant(c::IMPLEMENTATION).0);
-                if state.code.get(&owner) != Some(&pinned) {
-                    // No Helix code runs at an account that is not delegated to it.
+                if !helix_code(state.code.get(&owner)) {
+                    // No Helix code runs at an account that is not delegated to it
+                    // (both Diamonds have the same getters).
                     return Ok(json!("0x"));
                 }
                 let data = params[0]["data"].as_str().unwrap_or_default().to_lowercase();
@@ -424,15 +474,19 @@ fn execute(state: &mut State, raw: Vec<u8>) -> Result<Value, String> {
             }
         }
     }
-    let pinned = {
-        let mut code = hex::decode("ef0100").unwrap();
-        code.extend_from_slice(&Address::constant(c::IMPLEMENTATION).0);
-        code
-    };
-    let delegated = state.code.get(&to) == Some(&pinned);
+    let delegated = helix_code(state.code.get(&to));
+    let on_v1 = state.code.get(&to) == Some(&delegation(c::IMPLEMENTATION_V1));
     let data_hex = hex0x(&data);
     let mut logs = Vec::new();
-    if to == sender && delegated && data_hex.starts_with(&c::install_selector()) {
+    // The version 1 account's RuleKind enum ends at 9: an Origin rule reverts there.
+    let reverts = to == sender
+        && on_v1
+        && data_hex.starts_with(&c::install_selector())
+        && helix_signer_core::abi::decode_install(&data[4..]).map(|call| call.rules.iter().any(|rule| rule.kind >= c::FIRST_VERSION_2_KIND)).unwrap_or(false);
+    let status = if reverts { "0x0" } else { "0x1" };
+    if reverts {
+        // Nothing changes.
+    } else if to == sender && delegated && data_hex.starts_with(&c::install_selector()) {
         let call = helix_signer_core::abi::decode_install(&data[4..]).map_err(|_| "bad calldata")?;
         let grant = hex0x(&call.grant_id);
         state.policy.entry(to).or_default().insert(grant.clone(), call.key);
@@ -447,7 +501,7 @@ fn execute(state: &mut State, raw: Vec<u8>) -> Result<Value, String> {
     state.block += 1;
     let hash = hex0x(&keccak(&raw));
     let block = state.block;
-    state.receipts.insert(hash.clone(), json!({"transactionHash": hash, "status": "0x1", "blockNumber": quantity(block), "gasUsed": format!("{:#x}", gas / U256::from(2)), "logs": logs}));
+    state.receipts.insert(hash.clone(), json!({"transactionHash": hash, "status": status, "blockNumber": quantity(block), "gasUsed": format!("{:#x}", gas / U256::from(2)), "logs": logs}));
     state.sent.push(Sent { tx_type, raw, sender, nonce, to, data, gas, authorities });
     Ok(json!(hash))
 }
@@ -544,9 +598,7 @@ impl Fake {
                 if !state.policy.get(&owner_address).map(|grants| grants.contains_key(&grant)).unwrap_or(false) {
                     return status(409, json!({"error": "revoked"}));
                 }
-                let mut pinned = hex::decode("ef0100").unwrap();
-                pinned.extend_from_slice(&Address::constant(c::IMPLEMENTATION).0);
-                if state.code.get(&owner_address).map(|code| !code.is_empty() && *code != pinned).unwrap_or(false) {
+                if state.code.get(&owner_address).map(|code| !code.is_empty() && !helix_code(Some(code))).unwrap_or(false) {
                     // Like the website: a grant under a foreign delegation is not revocable.
                     return status(409, json!({"error": "foreign delegation", "status": "inactive", "reason": "otherDelegation"}));
                 }

@@ -52,8 +52,10 @@ fn u256(value: &Value) -> U256 {
 }
 
 fn state_of(op: &Value) -> AccountState {
+    // "pinned" (recorded by the former Python signer) is the version 2 Diamond.
     let kind = match text(op, "state") {
-        "pinned" => AccountKind::Pinned,
+        "pinned" | "v2" => AccountKind::V2,
+        "v1" => AccountKind::V1,
         _ => AccountKind::Plain,
     };
     AccountState {
@@ -102,13 +104,16 @@ fn operate(op: &Value) -> Result<Value> {
             Ok(json!({"plan": verified, "summary": summary.text()}))
         }
         "verify_revoke" => {
-            let verified = plan::verify_revoke_plan(op.get("plan").unwrap_or(&Value::Null), &constants)?;
+            let mut verified = plan::verify_revoke_plan(op.get("plan").unwrap_or(&Value::Null), &constants)?;
             // The former Python signer only revoked on an account delegated to the
             // pinned implementation, so a recorded revoke without "state" is that
-            // one; "plain" (re-delegate and revoke) must be asked for explicitly.
+            // one; "plain" (re-delegate and revoke) or "v1" must be asked for
+            // explicitly, and then the plan's delegate must be the wallet's.
             let mut state = state_of(op);
             if op.get("state").is_none() {
-                state.kind = AccountKind::Pinned;
+                state.kind = AccountKind::V2;
+            } else {
+                plan::bind_revoke_delegate(&mut verified, state.delegate(&constants, false))?;
             }
             let summary = summary::revoke_summary(&verified, &state, op.get("api").and_then(Value::as_str), text(op, "rpc"), &constants);
             Ok(json!({"plan": verified, "summary": summary.text()}))

@@ -24,7 +24,7 @@ use crate::keys::KeyMaterial;
 use crate::message::Message;
 use crate::msg;
 use crate::net::{http_json, is_loopback, validate_url, Rpc, Transport};
-use crate::plan::{check_token, offline_revoke, unix_now, verify_grant_plan, verify_revoke_plan, GrantPlan, RevokePlan};
+use crate::plan::{bind_revoke_delegate, check_token, offline_revoke, unix_now, verify_grant_plan, verify_revoke_plan, GrantPlan, RevokePlan};
 use crate::pyfmt::py_str;
 use crate::summary::{dai, grant_summary, revoke_summary, PlanKind, Summary};
 use crate::website::Website;
@@ -263,6 +263,14 @@ fn checked_state(rpc: &Rpc, owner: &Address, constants: &Constants, install: boo
     }
 }
 
+/// Before a revocation: the Diamond the wallet keeps using (version 1 or 2,
+/// version 2 for a plain account that the revocation re-delegates) has its
+/// reviewed code, and the plan names that Diamond if it names one.
+fn check_revoke_delegate(rpc: &Rpc, constants: &Constants, state: &AccountState, plan: &mut RevokePlan) -> Result<()> {
+    chain::check_account_delegate(rpc, constants, state, false)?;
+    bind_revoke_delegate(plan, state.delegate(constants, false))
+}
+
 /// Plan, chain and network failures become FlowError with the same text;
 /// a FlowError passes unchanged.
 fn as_flow(error: Error) -> Error {
@@ -444,6 +452,7 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
         chain::check_chain(&rpc, constants)?;
         require_owner(material, &plan.owner)?;
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
+        check_revoke_delegate(&rpc, constants, &state, &mut plan)?;
         let live = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)?;
         let Some(live) = live else {
             return Err(Error::coded(
@@ -458,6 +467,7 @@ pub fn prepare_revoke(rpc_url: &str, constants: &Constants, source: RevokeSource
         let detect = matches!(source, RevokeSource::Offline { kind: None, .. });
         if detect && live != plan.grant_kind {
             plan = offline_revoke(&plan.owner.to_checksum(), &plan.grant_id, live.as_str(), constants)?;
+            plan.implementation = state.delegate(constants, false);
         } else if live != plan.grant_kind {
             return Err(Error::coded(
                 ErrorKind::Flow,
@@ -480,6 +490,8 @@ struct Sent {
     tx_hash: String,
     tx_type: u8,
     receipt: Map<String, Value>,
+    /// The account was on the version 1 Diamond when signed.
+    from_v1: bool,
 }
 
 /// Estimate, check gas, sign, broadcast and wait; the key is wiped (dropped).
@@ -491,10 +503,13 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
     let signed = (|| -> Result<(chain::SignedTransaction, bool)> {
         require_owner(Some(&material), &owner)?;
         let state = checked_state(rpc, &owner, constants, install)?;
+        chain::check_account_delegate(rpc, constants, &state, install)?;
         let (max_fee, tip) = chain::fees(rpc)?;
-        // A plain account is delegated by this transaction: for an install, and
-        // for revoking a dormant grant left in its storage (re-delegation).
-        let authorization = if state.kind == AccountKind::Plain {
+        // A plain account is delegated to the version 2 Diamond by this
+        // transaction: for an install, and for revoking a dormant grant left in
+        // its storage (re-delegation). An account on version 1 moves to version
+        // 2 with an install (its grants are kept) and revokes in place.
+        let authorization = if state.needs_authorization(install) {
             Some(chain::sign_authorization(&material, constants, state.nonce)?)
         } else {
             None
@@ -522,13 +537,13 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
                 ),
             ));
         }
-        let has_authorization = authorization.is_some();
+        let from_v1 = state.kind == AccountKind::V1;
         let signed = chain::sign_transaction(&material, constants, &owner, current.plan.data(), state.nonce, gas, max_fee, tip, authorization)?;
-        Ok((signed, has_authorization))
+        Ok((signed, from_v1))
     })();
     material.wipe();
     drop(material);
-    let (signed, _) = signed.map_err(as_flow)?;
+    let (signed, from_v1) = signed.map_err(as_flow)?;
     let tx_hash = signed.hash.clone();
     let tx_type = signed.tx_type;
     let receipt = (|| -> Result<Map<String, Value>> {
@@ -538,7 +553,7 @@ fn send(current: &Session, material: KeyMaterial, log: Log, install: bool) -> Re
         chain::wait_receipt(rpc, &tx_hash, current.polling)
     })()
     .map_err(|error| wrapped(error, with_transaction(&tx_hash)))?;
-    Ok(Sent { tx_hash, tx_type, receipt })
+    Ok(Sent { tx_hash, tx_type, receipt, from_v1 })
 }
 
 /// Tell the website the transaction hash (it verifies it on chain itself).
@@ -588,7 +603,15 @@ pub fn execute_sign(current: &Session, material: KeyMaterial, log: Log) -> Resul
     chain::verify_install(&current.rpc, &plan.owner, &plan.grant_id, &plan.session_key, &sent.receipt, &current.constants)
         .map_err(|error| wrapped(error, with_transaction(&sent.tx_hash)))?;
     let block = receipt_number(&sent.receipt, "blockNumber");
-    log(&msg!("log.confirmedGrant", "Confirmed in block {block}: delegation and grant verified on chain.", block = block));
+    if sent.from_v1 {
+        log(&msg!(
+            "log.confirmedMovedGrant",
+            "Confirmed in block {block}: the account moved to the version 2 Diamond (its grants are kept); delegation and grant verified on chain.",
+            block = block
+        ));
+    } else {
+        log(&msg!("log.confirmedGrant", "Confirmed in block {block}: delegation and grant verified on chain.", block = block));
+    }
     let (reported, report_message) = report(current, &sent.tx_hash, log);
     Ok(Outcome {
         tx_hash: sent.tx_hash,
@@ -687,9 +710,10 @@ pub fn prepare_grant_revoke(site: &Website, grant_id: &str, rpc_url: &str, const
         Err(error) => return Err(as_flow(error)),
     };
     let prepared = (|| -> Result<Option<(RevokePlan, AccountState)>> {
-        let plan = revoke_call_plan(&Value::Object(call), &material.address(), grant_id, constants)?;
+        let mut plan = revoke_call_plan(&Value::Object(call), &material.address(), grant_id, constants)?;
         chain::check_chain(&rpc, constants)?;
         let state = checked_state(&rpc, &plan.owner, constants, false)?;
+        check_revoke_delegate(&rpc, constants, &state, &mut plan)?;
         let Some(live) = chain::detect_stored_grant_kind(&rpc, &state, &plan.owner, &plan.grant_id)? else {
             log(&msg!("log.notActive", "Grant {grant} is not active on chain; nothing to sign.", grant = grant_id));
             return Ok(None);

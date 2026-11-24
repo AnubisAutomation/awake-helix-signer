@@ -53,31 +53,69 @@ fn u256_string<S: serde::Serializer>(value: &U256, serializer: S) -> std::result
 }
 
 impl Rule {
-    /// The method name this rule permits.
+    /// The method name this rule permits (names repeat across kinds:
+    /// participate 1/10, activate 5/11, claim 14/18; see [`Rule::label`]).
     pub fn method(&self) -> &'static str {
         let signature = c::RULE_METHODS[self.kind as usize];
         &signature[..signature.find('(').unwrap_or(signature.len())]
     }
 
-    /// The primary amount's unit and decimals (as the planner shows).
+    /// The method name, with the kind for an Origin kind (``participate``,
+    /// ``participate (kind 10)``): unambiguous in messages.
+    pub fn label(&self) -> String {
+        if self.is_origin() {
+            format!("{} (kind {})", self.method(), self.kind)
+        } else {
+            self.method().to_string()
+        }
+    }
+
+    /// Whether this is an Origin kind (version 2 account only).
+    pub fn is_origin(&self) -> bool {
+        self.kind >= c::FIRST_VERSION_2_KIND
+    }
+
+    /// Whether the caps count calls (maxAmount 1, maxDaily calls per UTC day).
+    pub fn is_counted(&self) -> bool {
+        c::COUNTED_KINDS.contains(&self.kind)
+    }
+
+    /// The primary amount's unit and decimals (``helix_runtime/rule_kinds.py``):
+    /// fixed per kind, or the token's for kinds 0 (the approved token), 3 and
+    /// 4 (the input token).
     pub fn unit(&self) -> (&'static str, u32) {
+        if let Some((Some(unit), decimals)) = c::RULE_UNITS.get(self.kind as usize) {
+            return (unit, *decimals);
+        }
         let token = if self.kind == 0 {
             self.target
-        } else if c::SWAP_KINDS.contains(&self.kind) {
+        } else if [3, 4].contains(&self.kind) {
             self.token_in
         } else {
             Address::ZERO
         };
-        if self.kind == 2 || token == Address::constant(c::LGNS) {
+        if token == Address::constant(c::LGNS) {
             return ("LGNS", 9);
         }
-        if self.kind == 9 {
-            return ("lock IDs", 0);
-        }
-        if [5, 6, 7, 8].contains(&self.kind) || token == Address::constant(c::AILGNS) {
+        if token == Address::constant(c::AILGNS) {
             return ("aiLGNS", 18);
         }
         ("DAI", 18)
+    }
+
+    /// For the floor kinds (``SWAP_KINDS``): the floor's input and output
+    /// tokens. A swap names them in the rule; New Turbo participate pays DAI
+    /// for at least the floor in LGNS, activate gets back at least the floor
+    /// in DAI per DAI paid, and sell pays LGNS for at least the floor in DAI.
+    pub fn floor_tokens(&self) -> Option<(Address, Address)> {
+        let (dai, lgns) = (Address::constant(c::DAI), Address::constant(c::LGNS));
+        match self.kind {
+            3 | 4 => Some((self.token_in, self.counterparty)),
+            10 => Some((dai, lgns)),
+            11 => Some((dai, dai)),
+            12 => Some((lgns, dai)),
+            _ => None,
+        }
     }
 }
 
@@ -103,7 +141,7 @@ pub struct GrantPlan {
     pub rules: Vec<Rule>,
     /// Exact lowercase calldata to send.
     pub data: String,
-    /// Pinned delegate.
+    /// Pinned delegate: the version 2 Diamond.
     pub implementation: Address,
     /// Raw plan (script name, bounds, customization).
     pub plan: Value,
@@ -121,8 +159,13 @@ pub struct RevokePlan {
     pub grant_kind: GrantKind,
     /// Exact calldata.
     pub data: String,
-    /// Pinned delegate the account must use.
+    /// Pinned delegate the account uses for the revocation: the Diamond the
+    /// plan names (version 1 or 2), else the version 2 Diamond; set to the
+    /// wallet's own Diamond once its delegation was read on chain.
     pub implementation: Address,
+    /// The Diamond the website's plan named, if any (it must be the wallet's).
+    #[serde(skip)]
+    pub named_implementation: Option<Address>,
     /// Raw plan, or ``{}`` for an offline revoke.
     pub plan: Value,
 }
@@ -216,12 +259,31 @@ fn common<'a>(plan: &'a Value, kind: &str, constants: &Constants) -> Result<(&'a
         return Err(Error::plan("The plan moves native value; Anubis transactions must have value 0."));
     }
     let implementation = get(map, "implementation");
-    if !implementation.is_null() && field_address(Some(implementation), "implementation")? != constants.implementation {
-        return Err(Error::plan(format!(
-            "Wrong delegate {}: only Helix7702 implementation {} is accepted.",
-            py_str(implementation),
-            constants.implementation
-        )));
+    if !implementation.is_null() {
+        // A grant installs only with the version 2 Diamond (a wallet on version 1
+        // is re-delegated by the grant's transaction); a revocation may name either
+        // Diamond, and must name the one the wallet uses (checked on chain).
+        let named = field_address(Some(implementation), "implementation")?;
+        let v1 = constants.implementation_v1;
+        if kind == "grant" && named != constants.implementation && named == v1 {
+            return Err(Error::plan(format!(
+                "Wrong delegate {}: that is the version 1 Helix7702 Diamond; a grant installs only with the version 2 Diamond {} (a wallet on version 1 moves to it in the same transaction).",
+                py_str(implementation),
+                constants.implementation
+            )));
+        }
+        let revocable = kind != "grant" && named == v1;
+        if named != constants.implementation && !revocable {
+            let accepted = if kind == "grant" || v1 == constants.implementation {
+                constants.implementation.to_string()
+            } else {
+                format!("{} or {v1}", constants.implementation)
+            };
+            return Err(Error::plan(format!(
+                "Wrong delegate {}: only Helix7702 implementation {accepted} is accepted.",
+                py_str(implementation)
+            )));
+        }
     }
     match map.get("data") {
         Some(Value::String(data)) if is_hex_data(data) && data.len() >= 10 => {}
@@ -230,6 +292,10 @@ fn common<'a>(plan: &'a Value, kind: &str, constants: &Constants) -> Result<(&'a
     Ok((map, owner))
 }
 
+/// Check one decoded rule against the allow-list and the bounds the account
+/// contract applies to its kind (Helix7702AccountV2 ``_checkPolicyCall``,
+/// ``_checkOriginCall``, ``_checkSwap``), so the owner never grants a rule
+/// whose calls the contract would refuse or that is looser than it shows.
 fn check_rule(raw: &RawRule) -> Result<Rule> {
     let kind = raw.kind;
     let allowed = c::allowed_for(kind).ok_or_else(|| Error::plan(format!("Unknown rule kind {kind}.")))?;
@@ -249,17 +315,22 @@ fn check_rule(raw: &RawRule) -> Result<Rule> {
             && Address::constant(token_in) == rule.token_in
             && Address::constant(counterparty) == rule.counterparty
     });
-    let method = rule.method();
+    let method = rule.label();
     if !listed {
         let target = rule.target.to_checksum();
         let name = match c::contract_name(&target) {
             "" => target,
             name => name.to_string(),
         };
+        let list = if rule.is_origin() { "Origin" } else { "HELIX" };
         return Err(Error::plan(format!(
-            "Rule {method} on {name} (tokenIn {}, counterparty {}) is not on the HELIX allow-list.",
+            "Rule {method} on {name} (tokenIn {}, counterparty {}) is not on the {list} allow-list.",
             rule.token_in, rule.counterparty
         )));
+    }
+    if rule.is_origin() && (!rule.token_in.is_zero() || !rule.counterparty.is_zero()) {
+        // Implied by the allow-list; kept so a later table change cannot loosen it.
+        return Err(Error::plan(format!("Rule {method} names a token or counterparty; Origin rules name neither.")));
     }
     if raw.usage_day != 0 || !raw.used_today.is_zero() {
         return Err(Error::plan("A rule arrives with non-zero usage counters."));
@@ -267,9 +338,18 @@ fn check_rule(raw: &RawRule) -> Result<Rule> {
     if rule.max_amount.is_zero() || rule.max_daily < rule.max_amount {
         return Err(Error::plan(format!("Rule {method} has an invalid per-call or daily cap.")));
     }
+    if rule.is_counted() && rule.max_amount != U256::from(1) {
+        return Err(Error::plan(format!(
+            "Rule {method} counts calls: its per-call cap must be 1 and its daily cap the number of calls per UTC day."
+        )));
+    }
     let swap = c::SWAP_KINDS.contains(&kind);
     if swap && rule.min_out_per_in_wad.is_zero() {
-        return Err(Error::plan(format!("Swap rule {method} has no price floor.")));
+        return Err(Error::plan(if rule.is_origin() {
+            format!("Rule {method} has no price floor.")
+        } else {
+            format!("Swap rule {method} has no price floor.")
+        }));
     }
     if !swap && !rule.min_out_per_in_wad.is_zero() {
         return Err(Error::plan(format!("Rule {method} carries an unexpected price field.")));
@@ -281,11 +361,16 @@ fn check_rule(raw: &RawRule) -> Result<Rule> {
     } else if rule.max_deadline_delay != 0 {
         return Err(Error::plan(format!("Rule {method} carries an unexpected deadline field.")));
     }
-    if kind != 5 && !rule.max_secondary.is_zero() {
+    let secondary = c::SECONDARY_KINDS.contains(&kind);
+    if !secondary && !rule.max_secondary.is_zero() {
         return Err(Error::plan(format!("Rule {method} carries an unexpected secondary cap.")));
     }
-    if kind == 5 && rule.max_secondary.is_zero() {
-        return Err(Error::plan("Activation rule has no DAI cap."));
+    if secondary && rule.max_secondary.is_zero() {
+        return Err(Error::plan(if rule.is_origin() {
+            format!("Activation rule {method} has no DAI cap.")
+        } else {
+            "Activation rule has no DAI cap.".to_string()
+        }));
     }
     Ok(rule)
 }
@@ -492,7 +577,16 @@ pub fn verify_grant_plan(plan: &Value, constants: &Constants, now: Option<u64>) 
         let shown = shown.as_object().ok_or_else(preview_error)?;
         let target = shown.get("target").map(py_str).unwrap_or_default();
         let counterparty = shown.get("counterparty").map(py_str).unwrap_or_default();
+        // Method names repeat across kinds (participate 1/10, activate 5/11,
+        // claim 14/18): a preview is matched by its kind and target as well. An
+        // Origin rule's preview must name its kind; for kinds 0-9 it is checked
+        // when present.
+        let kind_matches = match shown.get("kind") {
+            Some(value) => !value.is_boolean() && py_int_eq(value, rule.kind as u64),
+            None => !rule.is_origin(),
+        };
         if shown.get("method").and_then(Value::as_str) != Some(rule.method())
+            || !kind_matches
             || !same(&target, &rule.target.to_checksum())
             || !same(&counterparty, &rule.counterparty.to_checksum())
         {
@@ -543,14 +637,34 @@ pub fn verify_revoke_plan(plan: &Value, constants: &Constants) -> Result<RevokeP
     if data != expected {
         return Err(Error::plan("Revoke calldata does not name the plan's grant ID exactly."));
     }
+    let named = match get(map, "implementation") {
+        Value::Null => None,
+        value => Some(field_address(Some(value), "implementation")?),
+    };
     Ok(RevokePlan {
         owner,
         grant_id: grant_text.to_lowercase(),
         grant_kind: kind,
         data,
-        implementation: constants.implementation,
+        implementation: named.unwrap_or(constants.implementation),
+        named_implementation: named,
         plan: plan.clone(),
     })
+}
+
+/// Bind a verified revocation to the Diamond the wallet uses for it (version
+/// 1 or 2; version 2 for a plain account the revocation re-delegates): a plan
+/// that names a Diamond must name that one.
+pub fn bind_revoke_delegate(plan: &mut RevokePlan, delegate: Address) -> Result<()> {
+    if let Some(named) = plan.named_implementation {
+        if named != delegate {
+            return Err(Error::plan(format!(
+                "Wrong delegate {named}: this account's grants run on the Helix7702 implementation {delegate}; get a new revocation from the website."
+            )));
+        }
+    }
+    plan.implementation = delegate;
+    Ok(())
 }
 
 /// Build a revocation without the website.
@@ -563,6 +677,7 @@ pub fn offline_revoke(owner: &str, grant_id: &str, grant_kind: &str, constants: 
         grant_kind: GrantKind::parse(grant_kind).expect("checked by revoke_calldata"),
         data,
         implementation: constants.implementation,
+        named_implementation: None,
         plan: Value::Object(Map::new()),
     })
 }

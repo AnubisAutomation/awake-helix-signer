@@ -63,8 +63,8 @@ pub const CODE_ALPHABET: &str = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 /// CORS allowed request headers.
 pub const ALLOW_HEADERS: &str = "Content-Type, X-Helix-Pairing, X-Helix-Timestamp, X-Helix-Nonce, X-Helix-Signature";
 
-/// SHA-256 of the constants a plan is verified against (``/health``), byte
-/// for byte the Python companion's value.
+/// SHA-256 of the constants a plan is verified against (``/health``): both
+/// Diamonds, the EntryPoint, the keys, the allow-list and the bounds.
 pub fn constants_hash(constants: &Constants) -> String {
     let mut allowlist = Map::new();
     for (kind, entries) in c::RULE_ALLOWLIST {
@@ -77,6 +77,8 @@ pub fn constants_hash(constants: &Constants) -> String {
         "chainId": constants.chain_id,
         "implementation": constants.implementation.to_lower(),
         "implementationCodeHash": constants.implementation_code_hash,
+        "implementationV1": constants.implementation_v1.to_lower(),
+        "implementationV1CodeHash": constants.implementation_v1_code_hash,
         "entryPoint": constants.entry_point.to_lower(),
         "attestationAddress": constants.attestation_address.to_lower(),
         "legacySessionKey": constants.legacy_session_key.to_lower(),

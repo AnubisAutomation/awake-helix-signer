@@ -3,14 +3,18 @@
 //! The owner sends the transaction itself, to its own address, with value 0:
 //!
 //! * plain EOA: one EIP-7702 type-4 transaction whose authorizationList holds
-//!   the owner's authorization for the pinned delegate. The sender is the
-//!   authority and the transaction's own nonce is consumed before the
+//!   the owner's authorization for the pinned version 2 Diamond. The sender
+//!   is the authority and the transaction's own nonce is consumed before the
 //!   authorization list is processed, so the authorization nonce is the
 //!   account nonce **plus one**. This holds for installs and for revoking a
 //!   dormant grant of an account whose delegation was cleared: its storage
 //!   persists, so the grant would act again after any later re-delegation;
 //!   the same transaction re-delegates and revokes;
-//! * already delegated to the pinned delegate: an ordinary EIP-1559 self-call;
+//! * delegated to the version 1 Diamond: a new grant is installed by the same
+//!   kind of type-4 transaction, which moves the delegation to version 2 (the
+//!   storage layout is the same, so its grants are kept); a revocation is an
+//!   ordinary EIP-1559 self-call and leaves the delegation as it is;
+//! * delegated to the version 2 Diamond: an ordinary EIP-1559 self-call;
 //! * delegated to anything else, or a contract: refused.
 //!
 //! Gas is paid in DAI (Anubis's native gas token).
@@ -47,12 +51,22 @@ pub const AUTHORIZATION_GAS: u64 = 25_000;
 pub enum AccountKind {
     /// No code: needs the type-4 delegation.
     Plain,
-    /// Delegated to the pinned implementation.
-    Pinned,
+    /// Delegated to the pinned version 1 Diamond: revokes with a self-call; a
+    /// grant re-delegates it to version 2 in the same type-4 transaction.
+    V1,
+    /// Delegated to the pinned version 2 Diamond (the current one).
+    V2,
     /// Delegated elsewhere (refused).
     Other,
     /// A contract (refused).
     Contract,
+}
+
+impl AccountKind {
+    /// Delegated to one of the reviewed Helix Diamonds (version 1 or 2).
+    pub fn is_helix(&self) -> bool {
+        matches!(self, AccountKind::V1 | AccountKind::V2)
+    }
 }
 
 /// The owner's delegation and nonce.
@@ -61,7 +75,7 @@ pub enum AccountKind {
 pub struct AccountState {
     /// Delegation state.
     pub kind: AccountKind,
-    /// Lowercase delegation target for ``pinned``/``other``, else "".
+    /// Lowercase delegation target for ``v1``/``v2``/``other``, else "".
     pub target: String,
     /// Next (pending) nonce.
     pub nonce: u64,
@@ -72,6 +86,31 @@ pub struct AccountState {
 
 fn u256_string<S: serde::Serializer>(value: &U256, serializer: S) -> std::result::Result<S::Ok, S::Error> {
     serializer.serialize_str(&value.to_string())
+}
+
+impl AccountState {
+    /// Whether a transaction for this account needs the owner's EIP-7702
+    /// authorization for the version 2 Diamond: a plain account always (it is
+    /// delegated by the transaction), a version 1 account for a grant (it moves
+    /// to version 2); never for an account already on version 2, and never to
+    /// revoke on version 1.
+    pub fn needs_authorization(&self, install: bool) -> bool {
+        match self.kind {
+            AccountKind::Plain => true,
+            AccountKind::V1 => install,
+            _ => false,
+        }
+    }
+
+    /// The reviewed Diamond the account uses for this transaction and after
+    /// it: version 1 for a revocation on version 1, otherwise version 2.
+    pub fn delegate(&self, constants: &Constants, install: bool) -> Address {
+        if self.kind == AccountKind::V1 && !install {
+            constants.implementation_v1
+        } else {
+            constants.implementation
+        }
+    }
 }
 
 /// Parse a JSON-RPC quantity.
@@ -100,8 +139,9 @@ fn code_bytes(code: &str) -> Result<Vec<u8>> {
     hex::decode(code.get(2..).unwrap_or_default()).map_err(|_| Error::network("Malformed eth_getCode answer."))
 }
 
-/// Require the RPC's chain ID and the pinned delegate's code; returns the
-/// latest block timestamp.
+/// Require the RPC's chain ID and the version 2 Diamond's code; returns the
+/// latest block timestamp. A wallet that stays on the version 1 Diamond has
+/// that Diamond checked too ([`check_account_delegate`]).
 pub fn check_chain(rpc: &Rpc, constants: &Constants) -> Result<u64> {
     let chain = quantity(&rpc.call("eth_chainId", json!([]))?)?;
     if chain != U256::from(constants.chain_id) {
@@ -110,7 +150,28 @@ pub fn check_chain(rpc: &Rpc, constants: &Constants) -> Result<u64> {
             crate::msg!("chain.wrongChain", "The RPC is chain {chain}, not Anubis Chain {expected}.", chain = chain, expected = constants.chain_id),
         ));
     }
-    let implementation = constants.implementation.to_checksum();
+    check_delegate_code(rpc, &constants.implementation, constants.implementation_code_hash.as_deref())?;
+    let block = rpc.call("eth_getBlockByNumber", json!(["latest", false]))?;
+    let timestamp = block
+        .as_object()
+        .and_then(|block| block.get("timestamp"))
+        .ok_or_else(|| Error::network("Cannot read the latest block."))?;
+    quantity_u64(timestamp)
+}
+
+/// For a wallet that keeps using the version 1 Diamond (a revocation on
+/// version 1), check that Diamond's code against its reviewed hash as well.
+pub fn check_account_delegate(rpc: &Rpc, constants: &Constants, state: &AccountState, install: bool) -> Result<()> {
+    let delegate = state.delegate(constants, install);
+    if state.kind == AccountKind::V1 && delegate == constants.implementation_v1 && delegate != constants.implementation {
+        check_delegate_code(rpc, &delegate, constants.implementation_v1_code_hash.as_deref())?;
+    }
+    Ok(())
+}
+
+/// Require a Diamond's runtime code, and its reviewed hash when one is pinned.
+fn check_delegate_code(rpc: &Rpc, delegate: &Address, expected: Option<&str>) -> Result<()> {
+    let implementation = delegate.to_checksum();
     let code = py_str(&rpc.call("eth_getCode", json!([implementation, "latest"]))?);
     if ["0x", "0x0", ""].contains(&code.as_str()) {
         return Err(Error::coded(
@@ -118,7 +179,7 @@ pub fn check_chain(rpc: &Rpc, constants: &Constants) -> Result<u64> {
             crate::msg!("chain.noDelegateCode", "The delegate {implementation} has no code on this chain.", implementation = &implementation),
         ));
     }
-    if let Some(expected) = &constants.implementation_code_hash {
+    if let Some(expected) = expected {
         let digest = hex0x(&keccak(&code_bytes(&code)?));
         if digest != expected.to_lowercase() {
             return Err(Error::coded(
@@ -127,17 +188,12 @@ pub fn check_chain(rpc: &Rpc, constants: &Constants) -> Result<u64> {
                     "chain.codeHash",
                     "The delegate's code hash {digest} differs from the reviewed {expected}; refusing to sign.",
                     digest = &digest,
-                    expected = expected.as_str()
+                    expected = expected
                 ),
             ));
         }
     }
-    let block = rpc.call("eth_getBlockByNumber", json!(["latest", false]))?;
-    let timestamp = block
-        .as_object()
-        .and_then(|block| block.get("timestamp"))
-        .ok_or_else(|| Error::network("Cannot read the latest block."))?;
-    quantity_u64(timestamp)
+    Ok(())
 }
 
 /// Classify the owner's code and read its nonce and gas balance.
@@ -148,7 +204,13 @@ pub fn account_state(rpc: &Rpc, owner: &Address, constants: &Constants) -> Resul
         (AccountKind::Plain, String::new())
     } else if code.starts_with(DELEGATION_PREFIX) && code.chars().count() == 48 {
         let target = format!("0x{}", &code[8..]);
-        let kind = if target == constants.implementation.to_lower() { AccountKind::Pinned } else { AccountKind::Other };
+        let kind = if target == constants.implementation.to_lower() {
+            AccountKind::V2
+        } else if target == constants.implementation_v1.to_lower() {
+            AccountKind::V1
+        } else {
+            AccountKind::Other
+        };
         (kind, target)
     } else {
         (AccountKind::Contract, String::new())
@@ -172,7 +234,8 @@ pub fn refuse_state(state: &AccountState, _install: bool) -> Option<Message> {
         AccountKind::Contract => Some(crate::msg!("chain.contractAccount", "This address is a contract, not an externally owned account.")),
         // A plain account may still store a dormant grant (its storage outlives the
         // delegation): a revocation re-delegates it in the same type-4 transaction.
-        AccountKind::Plain | AccountKind::Pinned => None,
+        // A version 1 account installs by moving to version 2 and revokes in place.
+        AccountKind::Plain | AccountKind::V1 | AccountKind::V2 => None,
     }
 }
 
@@ -188,8 +251,8 @@ pub fn fees(rpc: &Rpc) -> Result<(U256, U256)> {
     Ok((base.saturating_mul(U256::from(2)).saturating_add(tip), tip))
 }
 
-/// Sign the owner's EIP-7702 authorization for the pinned delegate with
-/// ``nonce + 1`` (``nonce`` is the transaction nonce).
+/// Sign the owner's EIP-7702 authorization for the pinned version 2 Diamond
+/// with ``nonce + 1`` (``nonce`` is the transaction nonce).
 pub fn sign_authorization(material: &KeyMaterial, constants: &Constants, nonce: u64) -> Result<Authorization> {
     let raw = material.raw()?;
     Authorization::sign(raw, constants.chain_id, constants.implementation, nonce + 1)
@@ -369,8 +432,8 @@ pub fn mapping_slot(grant_id: &str, base: u64) -> Result<[u8; 32]> {
 }
 
 /// Read a grant's session key straight from the account's storage, for an
-/// account that is not delegated to the pinned implementation (an
-/// ``eth_call`` would not run the Helix getters there).
+/// account that is not delegated to a pinned Diamond (an ``eth_call`` would
+/// not run the Helix getters there).
 pub fn read_stored_grant_key(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKind) -> Result<Address> {
     let slot = mapping_slot(grant_id, grant_mapping_slot(kind))?;
     let raw = py_str(&rpc.call("eth_getStorageAt", json!([owner.to_checksum(), hex0x(&slot), "latest"]))?);
@@ -380,8 +443,9 @@ pub fn read_stored_grant_key(rpc: &Rpc, owner: &Address, grant_id: &str, kind: G
 
 /// The stored session key of a grant, however the account is delegated now.
 pub fn grant_key(rpc: &Rpc, state: &AccountState, owner: &Address, grant_id: &str, kind: GrantKind) -> Result<Address> {
+    // Both Diamonds have the same getters and storage layout.
     match state.kind {
-        AccountKind::Pinned => read_grant_key(rpc, owner, grant_id, kind),
+        AccountKind::V1 | AccountKind::V2 => read_grant_key(rpc, owner, grant_id, kind),
         _ => read_stored_grant_key(rpc, owner, grant_id, kind),
     }
 }
@@ -397,11 +461,16 @@ pub fn detect_stored_grant_kind(rpc: &Rpc, state: &AccountState, owner: &Address
     Ok(None)
 }
 
-/// After a revocation: the account is delegated to the pinned implementation
-/// (a revocation of a dormant grant re-delegated it) and the key is cleared.
+fn delegation_code(delegate: &Address) -> String {
+    format!("{DELEGATION_PREFIX}{}", &delegate.to_lower()[2..])
+}
+
+/// After a revocation: the account is delegated to a pinned Diamond, version
+/// 1 or 2 (a revocation of a dormant grant re-delegated it to version 2), and
+/// the key is cleared.
 pub fn verify_revoke(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKind, constants: &Constants) -> Result<()> {
     let code = py_str(&rpc.call("eth_getCode", json!([owner.to_checksum(), "latest"]))?).to_lowercase();
-    if code != format!("{DELEGATION_PREFIX}{}", &constants.implementation.to_lower()[2..]) {
+    if code != delegation_code(&constants.implementation) && code != delegation_code(&constants.implementation_v1) {
         let shown: String = code.chars().take(60).collect();
         return Err(Error::chain(format!("After the transaction the account code is {shown}, not the Helix delegation.")));
     }
@@ -411,12 +480,16 @@ pub fn verify_revoke(rpc: &Rpc, owner: &Address, grant_id: &str, kind: GrantKind
     Ok(())
 }
 
-/// Check the delegation, the install event and the stored grant.
+/// Check the delegation (the version 2 Diamond: a wallet on version 1 was
+/// moved by the transaction), the install event and the stored grant.
 pub fn verify_install(rpc: &Rpc, owner: &Address, grant_id: &str, session_key: &Address, receipt: &Map<String, Value>, constants: &Constants) -> Result<()> {
     let code = py_str(&rpc.call("eth_getCode", json!([owner.to_checksum(), "latest"]))?).to_lowercase();
-    if code != format!("{DELEGATION_PREFIX}{}", &constants.implementation.to_lower()[2..]) {
+    if code != delegation_code(&constants.implementation) {
         let shown: String = code.chars().take(60).collect();
-        return Err(Error::chain(format!("After the transaction the account code is {shown}, not the Helix delegation.")));
+        return Err(Error::chain(format!(
+            "After the transaction the account code is {shown}, not the Helix delegation (version 2 Diamond {}).",
+            constants.implementation
+        )));
     }
     let topic_key = format!("0x{:0>64}", &session_key.to_lower()[2..]);
     let wanted = [c::policy_installed_topic(), grant_id.to_lowercase(), topic_key];

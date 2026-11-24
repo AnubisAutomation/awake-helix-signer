@@ -544,3 +544,165 @@ fn structured_summary_names_every_contract() {
     assert_eq!(json["grant"]["rules"][0]["spenderName"], "PowerLedger");
     assert_eq!(json["kind"], "grant");
 }
+
+// ------------------------------------------------- version 1 and version 2 Diamonds
+
+#[test]
+fn plain_eoa_is_delegated_to_the_version_2_diamond() {
+    let world = world();
+    world.serve(grant_plan(&world.owner, origin_rules(), 7 * 86400, 256));
+    let session = world.prepare().unwrap();
+    assert!(session.summary_text().contains("delegate the account and install the grant"));
+    let outcome = flow::execute_sign(&session, world.key.clone(), &quiet).unwrap();
+    assert_eq!(outcome.tx_type, 4);
+    assert_eq!(world.sent()[0].authorities, vec![(world.owner, 4, Address::constant(c::IMPLEMENTATION))]);
+    assert_eq!(world.fake.state.lock().unwrap().code[&world.owner], delegation(c::IMPLEMENTATION));
+}
+
+#[test]
+fn version_2_wallet_installs_an_origin_grant_with_a_self_call() {
+    let world = world();
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION);
+    let plan = grant_plan(&world.owner, origin_rules(), 7 * 86400, 256);
+    world.serve(plan.clone());
+    let session = world.prepare().unwrap();
+    assert!(session.summary_text().contains("ordinary self-call installing the grant"));
+    assert!(session.summary_text().contains("participate on New Turbo 2.5x"));
+    let outcome = flow::execute_sign(&session, world.key.clone(), &quiet).unwrap();
+    assert_eq!(outcome.tx_type, 2);
+    assert!(world.sent()[0].authorities.is_empty());
+    assert_eq!(world.fake.state.lock().unwrap().policy[&world.owner][plan["grantId"].as_str().unwrap()], session_key());
+}
+
+#[test]
+fn version_1_wallet_moves_to_version_2_in_the_grant_transaction_and_keeps_its_grants() {
+    let world = world();
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION_V1);
+    let old = format!("0x{}", "0a".repeat(32));
+    world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(old.clone(), Address([0x55; 20]));
+    let plan = grant_plan(&world.owner, origin_rules(), 7 * 86400, 256);
+    world.serve(plan.clone());
+    let session = world.prepare().unwrap();
+    assert_eq!(session.state.kind, helix_signer_core::chain::AccountKind::V1);
+    let text = session.summary_text();
+    assert!(text.contains("move the account from the version 1 to the version 2 Helix Diamond and install the grant"), "{text}");
+    assert!(text.contains(&format!("Moves from:  {}", c::IMPLEMENTATION_V1)), "{text}");
+    assert!(session.summary.grant.as_ref().unwrap().delegates);
+    let lines = std::sync::Mutex::new(Vec::new());
+    let outcome = flow::execute_sign(&session, world.key.clone(), &|line| lines.lock().unwrap().push(line.clone())).unwrap();
+    assert_eq!(outcome.tx_type, 4);
+    let sent = world.sent();
+    // One type-4 transaction: the owner's authorization for version 2 at nonce + 1, and the install.
+    assert_eq!((sent.len(), sent[0].nonce), (1, 3));
+    assert_eq!(sent[0].authorities, vec![(world.owner, 4, Address::constant(c::IMPLEMENTATION))]);
+    assert_eq!(hex::encode(&sent[0].data), plan["data"].as_str().unwrap()[2..]);
+    let state = world.fake.state.lock().unwrap();
+    assert_eq!(state.code[&world.owner], delegation(c::IMPLEMENTATION));
+    assert_eq!(state.policy[&world.owner][&old], Address([0x55; 20]), "the version 1 grant is kept");
+    assert_eq!(state.policy[&world.owner][plan["grantId"].as_str().unwrap()], session_key());
+    drop(state);
+    let lines = lines.into_inner().unwrap();
+    let confirmed = lines.iter().find(|line| line.code == "log.confirmedMovedGrant").expect("moved line");
+    assert!(confirmed.text.contains("moved to the version 2 Diamond (its grants are kept)"), "{}", confirmed.text);
+}
+
+#[test]
+fn a_grant_left_on_version_1_is_not_accepted_as_installed() {
+    // The node drops the authorization: the install runs on version 1. With an
+    // Origin rule it reverts there; with HELIX rules it lands, but the account is
+    // not on version 2, so the signer does not report success.
+    for (rules, fragment) in [(origin_rules(), "reverted on chain"), (dai_power(), "not the Helix delegation (version 2 Diamond")] {
+        let world = world();
+        world.fake.delegate(&world.owner, c::IMPLEMENTATION_V1);
+        world.fake.state.lock().unwrap().ignore_authorizations = true;
+        world.serve(grant_plan(&world.owner, rules, 7 * 86400, 256));
+        let session = world.prepare().unwrap();
+        let error = flow::execute_sign(&session, world.key.clone(), &quiet).unwrap_err();
+        assert!(error.message().contains(fragment), "{fragment}: {error}");
+        assert!(world.fake.state.lock().unwrap().reports.is_empty());
+    }
+}
+
+#[test]
+fn version_1_wallet_revokes_in_place_without_redelegation() {
+    let world = world();
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION_V1);
+    let grants = [format!("0x{}", "1a".repeat(32)), format!("0x{}", "1b".repeat(32)), format!("0x{}", "1c".repeat(32))];
+    for grant in &grants {
+        world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.clone(), session_key());
+    }
+    let transport = world.fake.transport();
+    // A website plan naming the version 1 Diamond.
+    world.serve(revoke_plan_naming(&world.owner, &grants[0], GrantKind::Policy, c::IMPLEMENTATION_V1));
+    let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
+    let session = fast(flow::prepare_revoke(RPC, &constants(), source, Some(&world.key), &transport, &quiet).unwrap());
+    let text = session.summary_text();
+    assert!(text.contains("Transaction: ordinary self-call revokePolicyGrant(bytes32)"), "{text}");
+    assert!(text.contains(&format!("Delegation:  {} (stays in place", c::IMPLEMENTATION_V1.to_lowercase())), "{text}");
+    let revoke = session.summary.revoke.as_ref().unwrap();
+    assert_eq!((revoke.redelegates, revoke.delegate), (false, Address::constant(c::IMPLEMENTATION_V1)));
+    let outcome = flow::execute_revoke(&session, world.key.clone(), &quiet).unwrap();
+    assert_eq!(outcome.tx_type, 2);
+    // Offline, the kind detected through the version 1 getters.
+    let offline = RevokeSource::Offline { owner: world.owner.to_checksum(), grant_id: grants[1].clone(), kind: None };
+    let session = fast(flow::prepare_revoke(RPC, &constants(), offline, Some(&world.key), &transport, &quiet).unwrap());
+    assert_eq!(flow::execute_revoke(&session, world.key.clone(), &quiet).unwrap().tx_type, 2);
+    // From the grants view (the website's revocation call names no Diamond).
+    let site = Website::new(API, transport.website.clone()).unwrap();
+    site.login(&world.key, &quiet).unwrap();
+    let session = fast(flow::prepare_grant_revoke(&site, &grants[2], RPC, &constants(), &world.key, &transport, &quiet).unwrap().unwrap());
+    assert_eq!(flow::execute_grant_revoke(&session, &world.key, &site, &quiet).unwrap().tx_type, 2);
+    let sent = world.sent();
+    assert_eq!(sent.len(), 3);
+    assert!(sent.iter().all(|item| item.tx_type == 2 && item.authorities.is_empty()));
+    let state = world.fake.state.lock().unwrap();
+    assert_eq!(state.code[&world.owner], delegation(c::IMPLEMENTATION_V1), "still on version 1");
+    assert!(grants.iter().all(|grant| !state.policy[&world.owner].contains_key(grant)));
+}
+
+#[test]
+fn version_2_wallet_revokes_without_redelegation() {
+    let world = world();
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION);
+    let grant = format!("0x{}", "2a".repeat(32));
+    world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.clone(), session_key());
+    world.serve(revoke_plan(&world.owner, &grant, GrantKind::Policy));
+    let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
+    let session = fast(flow::prepare_revoke(RPC, &constants(), source, Some(&world.key), &world.fake.transport(), &quiet).unwrap());
+    assert_eq!(session.summary.revoke.as_ref().unwrap().delegate, Address::constant(c::IMPLEMENTATION));
+    assert_eq!(flow::execute_revoke(&session, world.key.clone(), &quiet).unwrap().tx_type, 2);
+    assert!(world.sent()[0].authorities.is_empty());
+    assert_eq!(world.fake.state.lock().unwrap().code[&world.owner], delegation(c::IMPLEMENTATION));
+}
+
+#[test]
+fn revocations_must_name_the_wallets_own_diamond_and_its_code_is_checked() {
+    let grant = format!("0x{}", "3a".repeat(32));
+    // A plan naming version 2 for a wallet on version 1, and version 1 for a plain
+    // wallet (whose revocation re-delegates it to version 2).
+    for (delegated, named) in [(Some(c::IMPLEMENTATION_V1), c::IMPLEMENTATION), (None, c::IMPLEMENTATION_V1), (Some(c::IMPLEMENTATION), c::IMPLEMENTATION_V1)] {
+        let world = world();
+        if let Some(target) = delegated {
+            world.fake.delegate(&world.owner, target);
+        }
+        world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.clone(), session_key());
+        world.serve(revoke_plan_naming(&world.owner, &grant, GrantKind::Policy, named));
+        let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
+        let error = flow::prepare_revoke(RPC, &constants(), source, Some(&world.key), &world.fake.transport(), &quiet).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Flow);
+        assert!(error.message().starts_with(&format!("Wrong delegate {named}: this account's grants run on")), "{error}");
+    }
+    // The version 1 Diamond's code is checked against its reviewed hash when the wallet stays on it.
+    let world = world();
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION_V1);
+    world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.clone(), session_key());
+    world.fake.state.lock().unwrap().code.insert(Address::constant(c::IMPLEMENTATION_V1), b"\x00malicious".to_vec());
+    let offline = RevokeSource::Offline { owner: world.owner.to_checksum(), grant_id: grant.clone(), kind: None };
+    let error = flow::prepare_revoke(RPC, &constants(), offline, Some(&world.key), &world.fake.transport(), &quiet).unwrap_err();
+    assert!(error.message().contains("code hash"), "{error}");
+    assert_eq!(error.msg().code, "chain.codeHash");
+    // ... but a grant moving that wallet to version 2 does not depend on it.
+    world.serve(grant_plan(&world.owner, dai_power(), 7 * 86400, 256));
+    world.prepare().unwrap();
+    assert!(world.sent().is_empty());
+}

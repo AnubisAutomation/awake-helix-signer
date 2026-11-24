@@ -8,6 +8,14 @@
 //! personal_sign, EIP-712 attestations, type-2/type-4 transactions and the
 //! companion's constants hash. Every case must give the same value or the
 //! same refusal text (the version line of summaries aside).
+//!
+//! Signer 0.6.0 (version 2 Diamond, Origin rule kinds 10-26) rewrote the 11
+//! expectations whose answer changed on purpose: the three constants hashes
+//! (both Diamonds and the larger allow-list are hashed), the two production
+//! revocation calls (they now name the version 2 Diamond), the production
+//! grant plan naming the version 1 Diamond (now refused as such before its
+//! attestation is checked), and the five grants with a rule of kind 10 or 11
+//! (no longer an unknown kind: refused as not on the Origin allow-list).
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
