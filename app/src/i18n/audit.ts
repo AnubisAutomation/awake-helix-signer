@@ -52,10 +52,20 @@ const DATA = [
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, // UUIDs
 ];
 
+/** Names the core pins for contracts and shows next to their addresses
+ * (helix_signer_core::constants::CONTRACT_NAMES): data, like the addresses. */
+const CONTRACT_NAMES = [
+  "PowerLedger", "HELIX Router", "RocketSwap Router", "Community Vault", "Turbine",
+  "New Turbo 2.5x", "New Turbo 4x", "New Turbo Community", "Community Distributor", "Long Staking 360",
+  "Long Staking 600", "Energy Staking", "Energy Burner", "Origin Turbine", "Burn Bond Ranking Reward",
+  "Burn Bond", "Burn Fixed",
+].sort((left, right) => right.length - left.length); // "Origin Turbine" before "Turbine"
+
 function stripData(text: string): string {
   let rest = text;
   for (const pattern of DATA) rest = rest.replace(pattern, " ");
   for (const name of Object.values(NAMES)) rest = rest.split(name).join(" ");
+  for (const name of CONTRACT_NAMES) rest = rest.split(name).join(" ");
   return rest;
 }
 

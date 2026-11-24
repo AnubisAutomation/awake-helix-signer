@@ -23,7 +23,18 @@ export interface SiteText {
   en: string;
 }
 
-/** The verified summary as data (helix_signer_core::Summary). */
+/** A swap's tokens and price floor, or the floor of a New Turbo rule. */
+export interface FloorSummary {
+  tokenIn: string;
+  tokenInName: string;
+  tokenOut: string;
+  tokenOutName: string;
+  priceFloor: string;
+}
+
+/** The verified summary as data (helix_signer_core::Summary). Method names
+ * repeat across kinds (participate 1/10, activate 5/11, claim 14/18): a rule
+ * is shown with its target and handled by its kind, never by its name. */
 export interface RuleSummary {
   index: number;
   kind: number;
@@ -32,13 +43,21 @@ export interface RuleSummary {
   targetName: string;
   spender: string | null;
   spenderName: string;
-  swap: { tokenIn: string; tokenInName: string; tokenOut: string; tokenOutName: string; priceFloor: string } | null;
+  /** Kinds 3 and 4: the swap's tokens and price floor. */
+  swap: FloorSummary | null;
+  /** Kinds 10-12 (New Turbo participate, activate, sell): the floor's tokens and value. */
+  floor: FloorSummary | null;
+  /** DAI, LGNS, aiLGNS, "lock IDs" or "calls". */
   unit: string;
   decimals: number;
   maxPerCall: string;
   maxPerDay: string;
+  /** The caps count calls (one per call; the daily cap is calls per UTC day). */
+  counted: boolean;
   activationDai: string | null;
   deadlineSeconds: number | null;
+  /** The call names a recipient, always the owner's own account (kinds 25 and 26). */
+  paysOwner: boolean;
 }
 
 export interface Summary {
@@ -54,7 +73,12 @@ export interface Summary {
   balance: string;
   grant: {
     delegates: boolean;
+    /** The version 2 Diamond. */
     delegate: string;
+    /** The version 1 Diamond the account moves from in the same transaction, or null. */
+    movesFrom: string | null;
+    /** A rule is of an Origin kind (10-26). */
+    originRules: boolean;
     codeHashVerified: boolean;
     sessionKey: string;
     botScript: string | null;

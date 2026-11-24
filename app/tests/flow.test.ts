@@ -52,7 +52,11 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
     expect($<HTMLButtonElement>("sign").disabled).toBe(true);
     await click("edit-apply");
     const sent = backend.calls.find(([command]) => command === "customize")![1]!.request as Record<string, unknown>;
-    expect(sent).toEqual({ validUntil: 1794816462, remainingCalls: 200, rules: [{ index: 0, maxPerCall: "15", maxPerDay: "10" }] });
+    expect(sent).toEqual({
+      validUntil: 1794816462,
+      remainingCalls: 200,
+      rules: [{ index: 0, maxPerCall: "15", maxPerDay: "10" }, { index: 1, maxPerCall: "1", maxPerDay: "24" }],
+    });
     expect($("summary").textContent).toContain("at most 200 bot operations");
     type("confirm-word", "AUTHORIZE");
     expect($<HTMLButtonElement>("sign").disabled).toBe(false);
@@ -63,6 +67,35 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
     expect($("result").textContent).toContain("The website was notified.");
     expect(store.key).toBeNull(); // wiped after signing
     expect(backend.commands()).toEqual(expect.arrayContaining(["open_link", "load_key", "prepare_request", "customize", "sign", "key_status"]));
+  });
+
+  it("names each rule with its contract and keeps a counted rule at one per call", async () => {
+    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    $<HTMLInputElement>("key-source-privateKey").click();
+    type("key-private", "0x" + "11".repeat(32));
+    await click("request-load");
+    const names = [...document.querySelectorAll(".rule-name")].map((item) => item.textContent);
+    expect(names).toEqual(["1. approve on DAI (DAI)", "2. claim on Burn Fixed (calls)"]);
+    expect($<HTMLInputElement>("edit-call-1").readOnly).toBe(true);
+    expect($<HTMLInputElement>("edit-call-0").readOnly).toBe(false);
+    // The Origin rules of the summary: floors, the activation cap, counted calls, the own recipient.
+    const text = $("summary").textContent!;
+    for (const fragment of [
+      "Moves from: 0xdaFCb6c6B3d2Af124d58c5e05Ce44ABd8C8ff56A (the version 1 Diamond; the grants stored in the account are kept)",
+      "move the account from the version 1 to the version 2 Helix Diamond and install the grant",
+      "every target is on the pinned HELIX and Origin allow-list",
+      "4. participate on New Turbo 2.5x (0x0664F1369209677FEcb279F5EC3Df1E53a22212e)",
+      "price floor: at least 10 LGNS per 1 DAI",
+      "DAI back: at least 0.9 DAI back per 1 DAI paid",
+      "limit: 500 LGNS per call, 500 LGNS per UTC day",
+      "activation DAI: at most 50 DAI per call",
+      "6. claim on Burn Fixed (0x3f403751975e1EB06d95901f7FF246513444E71F)",
+      "limit: at most 24 calls per UTC day",
+      "recipient: always your own account (the contract refuses any other)",
+    ]) {
+      expect(text).toContain(fragment);
+    }
+    expect(text).not.toContain("1 calls per call");
   });
 
   it("keeps the plan when the website refuses an edit", async () => {

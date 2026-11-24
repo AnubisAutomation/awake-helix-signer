@@ -39,9 +39,23 @@ function ruleLines(rule: RuleSummary): SummaryLine[] {
       in: rule.swap.tokenInName || t("summary.input"),
     });
   }
-  detail("summary.limit", { perCall: rule.maxPerCall, perDay: rule.maxPerDay, unit: unitName(rule.unit) });
+  // New Turbo: participate (LGNS per DAI) and sell (DAI per LGNS) have a price
+  // floor; activate (kind 11) a floor of DAI back per DAI paid.
+  if (rule.floor) {
+    if (rule.kind === 11) detail("summary.daiBackFloor", { floor: rule.floor.priceFloor });
+    else {
+      detail("summary.priceFloor", {
+        floor: rule.floor.priceFloor,
+        out: rule.floor.tokenOutName || t("summary.output"),
+        in: rule.floor.tokenInName || t("summary.input"),
+      });
+    }
+  }
+  if (rule.counted) detail("summary.limitCalls", { perDay: rule.maxPerDay });
+  else detail("summary.limit", { perCall: rule.maxPerCall, perDay: rule.maxPerDay, unit: unitName(rule.unit) });
   if (rule.activationDai !== null) detail("summary.activation", { amount: rule.activationDai });
   if (rule.deadlineSeconds !== null) detail("summary.deadline", { seconds: formatNumber(rule.deadlineSeconds) });
+  if (rule.paysOwner) detail("summary.recipientOwn", {});
   return lines;
 }
 
@@ -61,8 +75,10 @@ export function summaryLines(summary: Summary): SummaryLine[] {
   const grant = summary.grant;
   const revoke = summary.revoke;
   if (grant) {
-    line("summary.transaction", { transaction: t(grant.delegates ? "summary.tx.delegateInstall" : "summary.tx.selfCallInstall") });
+    const transaction = grant.movesFrom ? "summary.tx.moveInstall" : grant.delegates ? "summary.tx.delegateInstall" : "summary.tx.selfCallInstall";
+    line("summary.transaction", { transaction: t(transaction) });
     line(grant.codeHashVerified ? "summary.delegateVerified" : "summary.delegate", { delegate: grant.delegate });
+    if (grant.movesFrom) line("summary.movesFrom", { delegate: grant.movesFrom });
     line("summary.sessionKey", { key: grant.sessionKey });
     if (grant.botScript) line("summary.bot", { script: grant.botScript, id: grant.botId });
     else line("summary.botId", { id: grant.botId });
@@ -70,7 +86,7 @@ export function summaryLines(summary: Summary): SummaryLine[] {
     line("summary.validFrom", { when: formatWhen(grant.validAfter) });
     line("summary.expires", { when: formatWhen(grant.validUntil) });
     line("summary.calls", { calls: formatNumber(grant.remainingCalls) });
-    line("summary.rules");
+    line(grant.originRules ? "summary.rulesOrigin" : "summary.rules");
     grant.rules.forEach((rule) => lines.push(...ruleLines(rule)));
     if (grant.customized.length) line("summary.customized", { fields: grant.customized.map(fieldName).join(t("common.listSeparator")) });
     line("summary.value");

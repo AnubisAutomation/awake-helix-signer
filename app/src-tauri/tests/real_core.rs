@@ -148,6 +148,10 @@ fn open_link_verify_edit_authorize() {
     assert_eq!(editor.rules.len(), 2);
     assert_eq!(editor.rules[0].max_per_call, "10");
     assert_eq!(editor.rules[0].decimals, 18);
+    // Rules are named by kind and target (method names repeat across kinds).
+    assert_eq!((editor.rules[0].kind, editor.rules[0].target_name.as_str()), (0, "DAI"));
+    assert_eq!((editor.rules[1].kind, editor.rules[1].method.as_str(), editor.rules[1].target_name.as_str()), (1, "participate", "PowerLedger"));
+    assert!(!editor.rules[1].counted);
 
     // Out of the website's bounds: refused, the verified plan stays.
     let refused = controller.customize(&json!({ "validUntil": editor.valid_until, "remainingCalls": 999999, "rules": [] })).unwrap_err();

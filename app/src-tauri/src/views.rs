@@ -100,7 +100,13 @@ pub struct RuleBounds {
 #[serde(rename_all = "camelCase")]
 pub struct EditorRule {
     pub index: usize,
+    /// RuleKind: method names repeat across kinds (participate 1/10, claim 14/18).
+    pub kind: u8,
     pub method: String,
+    /// The target's pinned name, or "".
+    pub target_name: String,
+    /// The caps count calls (Origin claims): the per-call cap is always 1.
+    pub counted: bool,
     pub unit: String,
     pub decimals: u32,
     pub max_per_call: String,

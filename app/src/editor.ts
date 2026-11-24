@@ -37,7 +37,13 @@ export interface Range {
 
 export interface EditorRule {
   index: number;
+  /** RuleKind (method names repeat across kinds). */
+  kind?: number;
   method: string;
+  /** The target's pinned name, or "". */
+  targetName?: string;
+  /** The caps count calls: the per-call cap is always 1. */
+  counted?: boolean;
   unit: string;
   decimals: number;
   maxPerCall: string;

@@ -1,7 +1,7 @@
 // Shared fixtures of the page tests: a scripted backend (the Tauri invoke
 // layer mocked) whose answers have the shapes src-tauri/src/views.rs sends,
 // including coded messages and the structured summary.
-import type { CommandError, GrantRow, Listing, Msg, SessionView, Summary, Transport } from "../src/api";
+import type { CommandError, GrantRow, Listing, Msg, RuleSummary, SessionView, Summary, Transport } from "../src/api";
 
 export function m(code: string, text: string, params: Msg["params"] = {}): Msg {
   return { code, params, text };
@@ -26,7 +26,9 @@ export function grantSummary(calls: number, perCall = "10", official = true): Su
     balance: "1.5 DAI",
     grant: {
       delegates: true,
-      delegate: "0x2C4a2bcA2C4E9b9Cb5D1D2c7a1fb51e6F5d6Fa8E",
+      delegate: "0xA37eBF54868c76B52A35741859d9835609d48695",
+      movesFrom: "0xdaFCb6c6B3d2Af124d58c5e05Ce44ABd8C8ff56A",
+      originRules: true,
       codeHashVerified: true,
       sessionKey: "0x70F6C48E3AfC7E499fF2329d698474Fd293626Bc",
       botScript: "dai-power",
@@ -39,23 +41,53 @@ export function grantSummary(calls: number, perCall = "10", official = true): Su
         {
           index: 1, kind: 0, method: "approve", target: "0x6B175474E89094C44Da98b954EedeAC495271d0F", targetName: "DAI",
           spender: "0x8a1b2C3d4E5f60718293A4b5C6d7E8f901234567", spenderName: "PowerLedger", swap: null, unit: "DAI", decimals: 18,
-          maxPerCall: perCall, maxPerDay: "10", activationDai: null, deadlineSeconds: null,
+          maxPerCall: perCall, maxPerDay: "10", counted: false, activationDai: null, deadlineSeconds: null, floor: null, paysOwner: false,
         },
         {
           index: 2, kind: 3, method: "swapExactTokensForTokens", target: "0x1111111111111111111111111111111111111111", targetName: "HelixRouter",
           spender: null, spenderName: "",
           swap: { tokenIn: "0x6B175474E89094C44Da98b954EedeAC495271d0F", tokenInName: "DAI", tokenOut: "0x4d1D808a081FdAC440703B3765fC61f8028C06B8", tokenOutName: "LGNS", priceFloor: "0.05" },
-          unit: "DAI", decimals: 18, maxPerCall: "5", maxPerDay: "20", activationDai: null, deadlineSeconds: 900,
+          unit: "DAI", decimals: 18, maxPerCall: "5", maxPerDay: "20", counted: false, activationDai: null, deadlineSeconds: 900, floor: null, paysOwner: false,
         },
         {
           index: 3, kind: 9, method: "withdrawLocked", target: "0x2222222222222222222222222222222222222222", targetName: "Turbine",
-          spender: null, spenderName: "", swap: null, unit: "lock IDs", decimals: 0, maxPerCall: "1", maxPerDay: "4", activationDai: "2", deadlineSeconds: null,
+          spender: null, spenderName: "", swap: null, unit: "lock IDs", decimals: 0, maxPerCall: "1", maxPerDay: "4", counted: false, activationDai: "2", deadlineSeconds: null,
+          floor: null, paysOwner: false,
         },
+        ...originRules(4),
       ],
       customized: ["remainingCalls", "rules[0].maxPerCall"],
     },
     revoke: null,
   };
+}
+
+/** Origin rules (version 2 Diamond) as the core summarizes them, numbered from `first`. */
+export function originRules(first: number): RuleSummary[] {
+  const turbo = "0x0664F1369209677FEcb279F5EC3Df1E53a22212e";
+  const dai = "0x83fd06F0846d9D90B3016bF670Efe2E0B11cDe14";
+  const lgns = "0x4D1D808a081FdAc440703b3765FC61f8028C06B8";
+  const base = { spender: null, spenderName: "", swap: null, floor: null, counted: false, activationDai: null, deadlineSeconds: null, paysOwner: false };
+  return [
+    {
+      ...base, index: first, kind: 10, method: "participate", target: turbo, targetName: "New Turbo 2.5x", unit: "DAI", decimals: 18,
+      maxPerCall: "100", maxPerDay: "100", deadlineSeconds: 600,
+      floor: { tokenIn: dai, tokenInName: "DAI", tokenOut: lgns, tokenOutName: "LGNS", priceFloor: "10" },
+    },
+    {
+      ...base, index: first + 1, kind: 11, method: "activate", target: turbo, targetName: "New Turbo 2.5x", unit: "LGNS", decimals: 9,
+      maxPerCall: "500", maxPerDay: "500", activationDai: "50", deadlineSeconds: 600,
+      floor: { tokenIn: dai, tokenInName: "DAI", tokenOut: dai, tokenOutName: "DAI", priceFloor: "0.9" },
+    },
+    {
+      ...base, index: first + 2, kind: 18, method: "claim", target: "0x3f403751975e1EB06d95901f7FF246513444E71F", targetName: "Burn Fixed",
+      unit: "calls", decimals: 0, maxPerCall: "1", maxPerDay: "24", counted: true,
+    },
+    {
+      ...base, index: first + 3, kind: 25, method: "silence", target: "0x92B53785090F6FE0717Ca3cF5dB8f8040d3B070b", targetName: "Origin Turbine",
+      unit: "DAI", decimals: 18, maxPerCall: "10", maxPerDay: "10", deadlineSeconds: 300, paysOwner: true,
+    },
+  ];
 }
 
 export function revokeSummary(grantId: string, redelegates = false): Summary {
@@ -97,7 +129,8 @@ export function session(calls: number, perCall = "10"): SessionView {
       remainingCalls: calls,
       bounds: { validUntil: { min: 1794000000, max: 1801000000 }, remainingCalls: { min: 2, max: 4096 } },
       rules: [
-        { index: 0, method: "approve", unit: "DAI", decimals: 18, maxPerCall: perCall, maxPerDay: "10", bounds: { maxPerCall: { min: "10", max: "20" }, maxPerDay: { min: "10", max: "40" } } },
+        { index: 0, kind: 0, method: "approve", targetName: "DAI", counted: false, unit: "DAI", decimals: 18, maxPerCall: perCall, maxPerDay: "10", bounds: { maxPerCall: { min: "10", max: "20" }, maxPerDay: { min: "10", max: "40" } } },
+        { index: 1, kind: 18, method: "claim", targetName: "Burn Fixed", counted: true, unit: "calls", decimals: 0, maxPerCall: "1", maxPerDay: "24" },
       ],
     },
   };

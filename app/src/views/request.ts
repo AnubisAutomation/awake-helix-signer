@@ -210,7 +210,11 @@ export class RequestView {
     };
     const rows = plan.rules.map((rule, position) => {
       const value = fields?.rules[position];
-      const perCall = h("input", { type: "text", inputmode: "decimal", value: value?.maxPerCall ?? rule.maxPerCall, "data-testid": `edit-call-${position}` });
+      // A counted rule (Origin claims) is one call per call: only its daily cap is edited.
+      const perCall = h("input", {
+        type: "text", inputmode: "decimal", value: rule.counted ? rule.maxPerCall : value?.maxPerCall ?? rule.maxPerCall,
+        readOnly: rule.counted === true, "data-testid": `edit-call-${position}`,
+      });
       const perDay = h("input", { type: "text", inputmode: "decimal", value: value?.maxPerDay ?? rule.maxPerDay, "data-testid": `edit-day-${position}` });
       for (const input of [perCall, perDay]) {
         input.oninput = this.onEdit;
@@ -231,7 +235,14 @@ export class RequestView {
         h(
           "div",
           { class: "rules-row" },
-          h("span", { class: "rule-name" }, t("editor.ruleName", { index: position + 1, method: rule.method, unit: unitName(rule.unit) })),
+          h(
+            "span",
+            { class: "rule-name" },
+            // Method names repeat across kinds and contracts: the target tells them apart.
+            rule.targetName
+              ? t("editor.ruleNameOn", { index: position + 1, method: rule.method, target: rule.targetName, unit: unitName(rule.unit) })
+              : t("editor.ruleName", { index: position + 1, method: rule.method, unit: unitName(rule.unit) }),
+          ),
           h("span", { class: "cap" }, perCall, range(rule.bounds?.maxPerCall)),
           h("span", { class: "cap" }, perDay, range(rule.bounds?.maxPerDay)),
         ),

@@ -189,9 +189,11 @@ function siteParams(params: Record<string, unknown>): Params {
   return values;
 }
 
-/** A cap unit: token symbols stay, "lock IDs" is translated. */
+/** A cap unit: token symbols stay, "lock IDs" and "calls" are translated. */
 export function unitName(unit: string): string {
-  return unit === "lock IDs" ? t("unit.lockIds") : unit;
+  if (unit === "lock IDs") return t("unit.lockIds");
+  if (unit === "calls") return t("unit.calls");
+  return unit;
 }
 
 /** The BCP 47 locale of the current language. */

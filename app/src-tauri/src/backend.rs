@@ -184,7 +184,10 @@ pub fn editor_of(plan: &core::GrantPlan) -> EditorPlan {
             });
             EditorRule {
                 index,
+                kind: rule.kind,
                 method: rule.method().to_string(),
+                target_name: core::constants::contract_name(&rule.target.to_checksum()).to_string(),
+                counted: rule.is_counted(),
                 unit: unit.to_string(),
                 decimals,
                 max_per_call: change
