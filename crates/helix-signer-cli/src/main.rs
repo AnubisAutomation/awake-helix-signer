@@ -1,4 +1,4 @@
-//! ``awake-helix-signer``: sign | revoke | grants | ping | open | serve |
+//! ``anubisauto-signer``: sign | revoke | grants | ping | open | serve |
 //! keystore | register | unregister | install-cli | uninstall-cli | status | gui.
 //!
 //! The same commands, options, prompts, messages and exit codes as the Python
@@ -36,9 +36,9 @@ const REFRESH_POLL_SECONDS: u64 = 3;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "awake-helix-signer",
+    name = "anubisauto-signer",
     version,
-    about = "Verify an Awake Helix hosted-bot plan against constants compiled into this program, sign it with your key on this computer and broadcast it to Anubis Chain 6714. Your key never leaves this computer."
+    about = "Verify an Anubis Automation hosted-bot plan against constants compiled into this program, sign it with your key on this computer and broadcast it to Anubis Chain 6714. Your key never leaves this computer."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -128,9 +128,9 @@ enum Command {
         #[arg(long, value_name = "URL", default_value = c::DEFAULT_API, hide_default_value = true)]
         api: String,
     },
-    /// Handle an awakehelix:// link in the terminal.
+    /// Handle an anubisauto:// link in the terminal.
     Open {
-        /// awakehelix://sign?plan=..., awakehelix://revoke?plan=..., awakehelix://grants or awakehelix://ping?token=...
+        /// anubisauto://sign?plan=..., anubisauto://revoke?plan=..., anubisauto://grants or anubisauto://ping?token=...
         link: String,
         /// Also trust this website origin.
         #[arg(long, value_name = "ORIGIN")]
@@ -166,23 +166,23 @@ enum Command {
         #[command(flatten)]
         key: KeyOptions,
     },
-    /// Register the desktop handler for awakehelix:// links.
+    /// Register the desktop handler for anubisauto:// links.
     Register,
-    /// Remove the awakehelix:// registration.
+    /// Remove the anubisauto:// registration.
     Unregister,
-    /// macOS/Linux app: add an awake-helix-signer command symlink (default ~/.local/bin).
+    /// macOS/Linux app: add an anubisauto-signer command symlink (default ~/.local/bin).
     InstallCli {
         /// Directory for the symlink.
         #[arg(long, value_name = "DIR")]
         dir: Option<PathBuf>,
     },
-    /// Remove the awake-helix-signer command symlink.
+    /// Remove the anubisauto-signer command symlink.
     UninstallCli,
-    /// Show the version, the awakehelix:// handler and the command symlink.
+    /// Show the version, the anubisauto:// handler and the command symlink.
     Status,
-    /// Open the desktop window (the Awake Helix Signer app).
+    /// Open the desktop window (the Anubis Automation Script Signer app).
     Gui {
-        /// Optional awakehelix:// link.
+        /// Optional anubisauto:// link.
         link: Option<String>,
     },
 }
@@ -687,19 +687,19 @@ fn run_keystore(out: &Path, console: &Console) -> Result<u8> {
     Ok(0)
 }
 
-/// The Awake Helix Signer app next to this program, if installed there.
+/// The Anubis Automation Script Signer app next to this program, if installed there.
 fn app_next_to_cli() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     let dir = exe.parent()?;
     let names: &[&str] = if cfg!(windows) {
-        &["AwakeHelixSigner.exe", "awake-helix-signer-app.exe"]
+        &["AnubisAutoSigner.exe", "anubisauto-signer-app.exe"]
     } else {
-        &["awake-helix-signer-app", "Awake Helix Signer"]
+        &["anubisauto-signer-app", "Anubis Automation Script Signer"]
     };
     names.iter().map(|name| dir.join(name)).find(|path| path.is_file())
 }
 
-/// The handler of awakehelix:// links: the app when it is installed next to
+/// The handler of anubisauto:// links: the app when it is installed next to
 /// this program, else this program's ``open`` in a terminal.
 fn handler() -> (Vec<String>, bool) {
     match app_next_to_cli() {
@@ -762,9 +762,9 @@ fn run(cli: Cli, console: &Console, transport: &Transport) -> Result<u8> {
         }
         Command::Status => {
             let program = register::program();
-            console.out(&format!("awake-helix-signer {}", helix_signer_core::VERSION));
+            console.out(&format!("{} {}", integrate::COMMAND, helix_signer_core::VERSION));
             console.out(&format!("program: {}", program.display()));
-            console.out(&format!("awakehelix:// handler: {}", registrar().registration().unwrap_or_else(|| "not registered".into())));
+            console.out(&format!("anubisauto:// handler: {}", registrar().registration().unwrap_or_else(|| "not registered".into())));
             let link = integrate::cli_link(&program, None).map(|link| link.display().to_string());
             console.out(&format!("terminal command: {}", link.unwrap_or_else(|| "no symlink (installer PATH or pip install)".into())));
             Ok(0)
@@ -777,7 +777,7 @@ fn run(cli: Cli, console: &Console, transport: &Transport) -> Result<u8> {
                 Ok(0)
             }
             None => {
-                console.out("The signer window cannot open here (the Awake Helix Signer app is not installed next to this program). Use the terminal instead, e.g. awake-helix-signer sign --plan <token> (awake-helix-signer --help lists every command).");
+                console.out("The signer window cannot open here (the Anubis Automation Script Signer app is not installed next to this program). Use the terminal instead, e.g. anubisauto-signer sign --plan <token> (anubisauto-signer --help lists every command).");
                 Ok(2)
             }
         },
@@ -789,7 +789,7 @@ fn run(cli: Cli, console: &Console, transport: &Transport) -> Result<u8> {
 fn rewrite(args: Vec<String>) -> Vec<String> {
     let mut args: Vec<String> = args.into_iter().enumerate().filter(|(index, arg)| *index == 0 || !arg.starts_with("-psn_")).map(|(_, arg)| arg).collect();
     if let Some(first) = args.get(1).cloned() {
-        if first.to_lowercase().starts_with("awakehelix:") {
+        if helix_signer_core::links::has_scheme(&first) {
             args.insert(1, "open".into());
         } else if first == "--register" && args.len() == 2 {
             args[1] = "register".into();
@@ -808,7 +808,7 @@ fn selftest(console: &Console) -> u8 {
         .unwrap_or_default();
     let ok = words && key == "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
     console.out(&format!(
-        "awake-helix-signer {} selftest {}: chain {}, delegate {} (version 1 {}), attestation {}, constants {}",
+        "anubisauto-signer {} selftest {}: chain {}, delegate {} (version 1 {}), attestation {}, constants {}",
         helix_signer_core::VERSION,
         if ok { "ok" } else { "FAILED" },
         constants.chain_id,

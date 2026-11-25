@@ -1,12 +1,12 @@
 //! Desktop integration: the per-user config directory and the
-//! ``awake-helix-signer`` command symlink (``install-cli``).
+//! ``anubisauto-signer`` command symlink (``install-cli``).
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
 /// Name of the terminal command.
-pub const COMMAND: &str = "awake-helix-signer";
+pub const COMMAND: &str = "anubisauto-signer";
 
 fn home(home: Option<&Path>) -> PathBuf {
     home.map(Path::to_path_buf).unwrap_or_else(|| {
@@ -21,13 +21,13 @@ pub fn config_dir() -> PathBuf {
     }
     if cfg!(windows) {
         let base = std::env::var_os("APPDATA").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home(None));
-        return base.join("AwakeHelixSigner");
+        return base.join("AnubisAutoSigner");
     }
     if cfg!(target_os = "macos") {
-        return home(None).join("Library/Application Support/AwakeHelixSigner");
+        return home(None).join("Library/Application Support/AnubisAutoSigner");
     }
     let base = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()).map(PathBuf::from).unwrap_or_else(|| home(None).join(".config"));
-    base.join("awake-helix-signer")
+    base.join(COMMAND)
 }
 
 /// Candidate directories for the command symlink, best first.
@@ -44,7 +44,7 @@ fn writable(directory: &Path) -> bool {
     if std::fs::create_dir_all(directory).is_err() {
         return false;
     }
-    let probe = directory.join(format!(".awake-helix-signer-probe-{}", std::process::id()));
+    let probe = directory.join(format!(".{COMMAND}-probe-{}", std::process::id()));
     match std::fs::File::create(&probe) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
@@ -64,7 +64,7 @@ pub fn cli_link(target: &Path, home_dir: Option<&Path>) -> Option<PathBuf> {
     cli_dirs(home_dir).into_iter().map(|dir| dir.join(COMMAND)).find(|link| std::fs::read_link(link).map(|to| to == target).unwrap_or(false))
 }
 
-/// Create (or refresh) the ``awake-helix-signer`` command symlink to ``target``.
+/// Create (or refresh) the ``anubisauto-signer`` command symlink to ``target``.
 pub fn install_cli(directory: Option<&Path>, home_dir: Option<&Path>, target: &Path) -> Result<String> {
     if cfg!(windows) {
         return Ok("On Windows the installer adds the program folder to PATH; open a new terminal.".into());
@@ -110,7 +110,7 @@ pub fn uninstall_cli(target: &Path, home_dir: Option<&Path>) -> String {
         }
     }
     if removed.is_empty() {
-        "no awake-helix-signer command link found".into()
+        format!("no {COMMAND} command link found")
     } else {
         format!("removed {}", removed.join(", "))
     }
@@ -124,12 +124,12 @@ mod tests {
     fn install_and_uninstall() {
         let folder = std::env::temp_dir().join(format!("helix-cli-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
-        let target = folder.join("app/awake-helix-signer");
+        let target = folder.join("app/anubisauto-signer");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, b"#!/bin/sh\n").unwrap();
         let message = install_cli(None, Some(&folder), &target).unwrap();
         assert!(message.starts_with("linked "), "{message}");
-        let link = folder.join(".local/bin/awake-helix-signer");
+        let link = folder.join(".local/bin/anubisauto-signer");
         assert_eq!(std::fs::read_link(&link).unwrap(), target);
         assert_eq!(cli_link(&target, Some(&folder)), Some(link.clone()));
         install_cli(None, Some(&folder), &target).unwrap();
@@ -137,7 +137,7 @@ mod tests {
         assert!(!link.exists());
         std::fs::write(&link, b"foreign").unwrap();
         assert!(install_cli(None, Some(&folder), &target).unwrap_err().message().contains("not a symlink"));
-        assert_eq!(uninstall_cli(&target, Some(&folder)), "no awake-helix-signer command link found");
+        assert_eq!(uninstall_cli(&target, Some(&folder)), "no anubisauto-signer command link found");
         assert!(link.exists());
         let _ = std::fs::remove_dir_all(&folder);
     }

@@ -315,6 +315,58 @@ fn revoke_with_a_plan_and_offline() {
     assert!(plain.sent().is_empty());
 }
 
+#[test]
+fn plan_schemas_and_revocations_of_grants_made_with_the_old_app() {
+    let constants = constants();
+    let world = world();
+    let grant = format!("0x{}", "ab".repeat(32));
+    // Grants: only anubisauto-signer-plan/2.
+    let plan = grant_plan(&world.owner, dai_power(), 7 * 86400, 256);
+    assert_eq!(plan["schema"], "anubisauto-signer-plan/2");
+    helix_signer_core::verify_grant_plan(&plan, &constants, None).unwrap();
+    for schema in ["anubisauto-signer-plan/1", "awake-helix-signer-plan/2", "awake-helix-signer-plan/1", "anubisauto-signer-plan/3"] {
+        let mut plan = plan.clone();
+        plan["schema"] = json!(schema);
+        let error = helix_signer_core::verify_grant_plan(&plan, &constants, None).unwrap_err();
+        assert!(error.message().starts_with(&format!("Unsupported plan schema '{schema}';")), "{schema}: {error}");
+    }
+    // Revocations: the new schemas and those of the signers before 0.7.0.
+    let revoke = revoke_plan(&world.owner, &grant, GrantKind::Policy);
+    assert_eq!(revoke["schema"], "anubisauto-signer-plan/1");
+    for schema in ["anubisauto-signer-plan/1", "anubisauto-signer-plan/2", "awake-helix-signer-plan/1", "awake-helix-signer-plan/2"] {
+        let mut plan = revoke.clone();
+        plan["schema"] = json!(schema);
+        let verified = helix_signer_core::verify_revoke_plan(&plan, &constants).unwrap_or_else(|error| panic!("{schema}: {error}"));
+        assert_eq!(verified.grant_id, grant);
+    }
+    for schema in [
+        json!("anubisauto-signer-plan/3"),
+        json!("awake-helix-signer-plan/3"),
+        json!("awake-helix-signer-plan"),
+        json!("ANUBISAUTO-SIGNER-PLAN/1"),
+        json!(" anubisauto-signer-plan/1"),
+        json!("anubisauto-signer-plan/1 "),
+        json!("awake-helix-signer-plan/1\n"),
+        json!(["anubisauto-signer-plan/1"]),
+        Value::Null,
+    ] {
+        let mut plan = revoke.clone();
+        plan["schema"] = schema.clone();
+        let error = helix_signer_core::verify_revoke_plan(&plan, &constants).unwrap_err();
+        assert!(error.message().starts_with("Unsupported plan schema "), "{schema}: {error}");
+    }
+    // A revocation the old website wrote still revokes end to end.
+    world.fake.delegate(&world.owner, c::IMPLEMENTATION);
+    world.fake.state.lock().unwrap().policy.entry(world.owner).or_default().insert(grant.clone(), session_key());
+    let mut old = revoke.clone();
+    old["schema"] = json!("awake-helix-signer-plan/1");
+    world.serve(old);
+    let source = RevokeSource::Plan { token: TOKEN.into(), api: API.into() };
+    let session = fast(flow::prepare_revoke(RPC, &constants, source, Some(&world.key), &world.fake.transport(), &quiet).unwrap());
+    flow::execute_revoke(&session, world.key.clone(), &quiet).unwrap();
+    assert!(!world.fake.state.lock().unwrap().policy[&world.owner].contains_key(&grant));
+}
+
 /// A plain (un-delegated) owner whose storage still holds a dormant grant.
 fn dormant(grant: &str) -> World {
     let world = world();

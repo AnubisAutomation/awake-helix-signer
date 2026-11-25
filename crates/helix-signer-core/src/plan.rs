@@ -380,7 +380,7 @@ fn word_u64(value: u64) -> [u8; 32] {
 }
 
 /// The EIP-712 digest a session key attestation signs:
-/// domain ``{name: "Awake Helix Session Key Attestation", version: "1", chainId}``,
+/// domain ``{name: "Anubis Automation Session Key Attestation", version: "1", chainId}``,
 /// ``SessionKeyAttestation(uint256 version,uint256 chainId,address owner,bytes16 botId,address sessionKey)``.
 pub fn attestation_digest(chain_id: u64, owner: &Address, bot: &[u8; 16], session_key: &Address) -> [u8; 32] {
     let domain_type = keccak(b"EIP712Domain(string name,string version,uint256 chainId)");

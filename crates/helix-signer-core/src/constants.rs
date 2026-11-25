@@ -7,7 +7,7 @@
 //! platform key that attests each bot's session key (`ATTESTATION_ADDRESS`,
 //! read from `attestation_address.txt` at the repository root at build time),
 //! the HELIX and Origin contracts and methods a grant rule may name (identical
-//! to the allow-list the Awake Helix website applies), and the bounds on
+//! to the allow-list the Anubis Automation website applies), and the bounds on
 //! lifetime and call count.
 //!
 //! Only `--dev-constants FILE` changes the delegates, their code hashes, the
@@ -290,15 +290,21 @@ pub const POLICY_GETTER: &str = "policyGrants(bytes32)";
 pub const SESSION_GETTER: &str = "grants(bytes32)";
 /// Install event.
 pub const POLICY_INSTALLED_EVENT: &str = "PolicyGrantInstalled(bytes32,address)";
-/// Grant plan schema (version 2 added sessionKeyAttestation).
-pub const PLAN_SCHEMA: &str = "awake-helix-signer-plan/2";
+/// Grant plan schema (version 2 added sessionKeyAttestation); the only one a
+/// grant plan may name.
+pub const PLAN_SCHEMA: &str = "anubisauto-signer-plan/2";
+/// Revocation plan schema the website writes.
+pub const REVOKE_PLAN_SCHEMA: &str = "anubisauto-signer-plan/1";
+/// Schemas of the signers before 0.7.0, accepted for revocations only, so
+/// grants made with the old app can still be revoked.
+pub const LEGACY_REVOKE_PLAN_SCHEMAS: [&str; 2] = ["awake-helix-signer-plan/1", "awake-helix-signer-plan/2"];
 /// Revocation plan schemas (no attestation needed).
-pub const REVOKE_PLAN_SCHEMAS: [&str; 2] = ["awake-helix-signer-plan/1", PLAN_SCHEMA];
+pub const REVOKE_PLAN_SCHEMAS: [&str; 4] = [REVOKE_PLAN_SCHEMA, PLAN_SCHEMA, LEGACY_REVOKE_PLAN_SCHEMAS[0], LEGACY_REVOKE_PLAN_SCHEMAS[1]];
 
 /// Session key attestation document version.
 pub const ATTESTATION_VERSION: u64 = 1;
 /// EIP-712 domain name.
-pub const ATTESTATION_NAME: &str = "Awake Helix Session Key Attestation";
+pub const ATTESTATION_NAME: &str = "Anubis Automation Session Key Attestation";
 /// EIP-712 domain version.
 pub const ATTESTATION_DOMAIN_VERSION: &str = "1";
 

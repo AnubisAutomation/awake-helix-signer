@@ -1,4 +1,4 @@
-//! ``awake-helix-signer serve``: a loopback companion the dashboard can call.
+//! ``anubisauto-signer serve``: a loopback companion the dashboard can call.
 //!
 //! Security model (unchanged from the Python signer):
 //!
@@ -533,7 +533,7 @@ impl Companion {
         let loaded = self.keys.loaded();
         let pairing_open = self.code.lock().map(|code| code.open()).unwrap_or(false);
         json!({
-            "name": "awake-helix-signer",
+            "name": "anubisauto-signer",
             "version": crate::VERSION,
             "constantsHash": constants_hash(&self.config.constants),
             "chainId": self.config.constants.chain_id,
@@ -549,7 +549,7 @@ impl Companion {
     pub fn pair(&self, site: &str, body: &Map<String, Value>) -> (u16, Value) {
         let Ok(mut code) = self.code.lock() else { return (500, json!({"error": "Pairing is unavailable."})) };
         if !code.open() {
-            return (410, json!({"error": "Pairing is closed. Restart `awake-helix-signer serve` for a new code."}));
+            return (410, json!({"error": "Pairing is closed. Restart `anubisauto-signer serve` for a new code."}));
         }
         let typed = body.get("code").map(crate::pyfmt::py_str).unwrap_or_default();
         if !code.check(&typed) {
@@ -724,7 +724,7 @@ impl Companion {
             return Err(answer(403, json!({"error": "Wrong Host."}), None));
         }
         self.allowed_origin(header("Origin").as_deref())
-            .ok_or_else(|| answer(403, json!({"error": "This website may not use the Awake Helix Signer."}), None))
+            .ok_or_else(|| answer(403, json!({"error": "This website may not use the Anubis Automation Script Signer."}), None))
     }
 
     /// Answer one HTTP request (``Handler``): method, request target, headers, body.

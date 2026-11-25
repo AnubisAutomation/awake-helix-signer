@@ -1,8 +1,8 @@
-"""The Rust signer's checks for Python tests (the Awake Helix website's tests).
+"""The Rust signer's checks for Python tests (the Anubis Automation website's tests).
 
 A thin adapter over ``helix-signer-devtool batch`` with the names the Python
 signer's library had, for tests that verify website output with it (the
-Awake Helix website's): the same refusals, the same decoded
+Anubis Automation website's): the same refusals, the same decoded
 values, from the code users run.
 
     from rust_signer import PlanError, verify_grant_plan
@@ -15,12 +15,12 @@ one from the pinned values). A development document only changes the values
 it names; plan verification ignores the ``development`` flag (it only labels
 summaries).
 
-``cli(args, lines)`` runs the user-facing ``awake-helix-signer`` executable
+``cli(args, lines)`` runs the user-facing ``anubisauto-signer`` executable
 without a controlling terminal, secrets on stdin, as a user's script would.
 
 ``HELIX_SIGNER_DEVTOOL`` names the devtool (default
 ``target/release/helix-signer-devtool`` in this repository), ``HELIX_SIGNER_BIN``
-the CLI (default ``target/release/awake-helix-signer``). A missing
+the CLI (default ``target/release/anubisauto-signer``). A missing
 binary raises ``SignerMissing`` saying how to build it.
 """
 
@@ -37,7 +37,7 @@ from typing import Any
 # The signer repository (works as a standalone clone and as a subdirectory).
 ROOT = Path(__file__).resolve().parents[2]
 DEVTOOL = Path(os.environ.get("HELIX_SIGNER_DEVTOOL") or ROOT / "target/release/helix-signer-devtool")
-BIN = Path(os.environ.get("HELIX_SIGNER_BIN") or ROOT / "target/release/awake-helix-signer")
+BIN = Path(os.environ.get("HELIX_SIGNER_BIN") or ROOT / "target/release/anubisauto-signer")
 BUILD = f"cd {ROOT} && cargo build --release -p helix-signer-cli"
 
 
@@ -150,7 +150,7 @@ def pinned_with(**changes: str) -> dict[str, Any]:
 
 def cli(args: list[str], lines: list[str] | None = None, *, env: dict[str, str] | None = None,
         timeout: int = 180) -> subprocess.CompletedProcess[str]:
-    """Run ``awake-helix-signer`` without a controlling terminal, ``lines`` on stdin."""
+    """Run ``anubisauto-signer`` without a controlling terminal, ``lines`` on stdin."""
     binary = require(BIN, "HELIX_SIGNER_BIN")
     return subprocess.run(
         [str(binary), *args], input="".join(f"{line}\n" for line in lines or []), capture_output=True, text=True,

@@ -22,7 +22,7 @@ from server import Fake
 
 # The signer repository (works as a standalone clone and as a subdirectory).
 ROOT = Path(__file__).resolve().parents[2]
-RUST_BIN = Path(os.environ.get("HELIX_SIGNER_BIN") or ROOT / "target/release/awake-helix-signer")
+RUST_BIN = Path(os.environ.get("HELIX_SIGNER_BIN") or ROOT / "target/release/anubisauto-signer")
 DEVTOOL_BIN = Path(os.environ.get("HELIX_SIGNER_DEVTOOL") or RUST_BIN.with_name("helix-signer-devtool"))
 
 

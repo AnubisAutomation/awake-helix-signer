@@ -3,11 +3,11 @@
 //!
 //! * ``verify-revoke-call --owner ADDR --grant ID --call JSON``: the check
 //!   ``grants revoke`` applies to a website-built revocation call (exit 0 when
-//!   accepted, 1 with the refusal on stdout). Used by the Awake Helix
+//!   accepted, 1 with the refusal on stdout). Used by the Anubis Automation
 //!   website's fork tests.
 //! * ``batch``: one JSON operation per stdin line, one JSON result per stdout
 //!   line: the replay of the Python signer's recorded answers
-//!   (``tests/python_answers.rs``) and the Awake Helix website's tests
+//!   (``tests/python_answers.rs``) and the Anubis Automation website's tests
 //!   (through ``tests/py/rust_signer.py``).
 
 use std::io::{BufRead, Write};

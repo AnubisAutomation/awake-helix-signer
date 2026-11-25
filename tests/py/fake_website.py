@@ -1,7 +1,7 @@
 """The website's owner API for signer tests: login, grants, revoke, customize.
 
 Wraps ``fakes.opener`` (plans, reports, RPC) with what the desktop app adds.
-The login and customize rules mirror the Awake Helix website's; the real API
+The login and customize rules mirror the Anubis Automation website's; the real API
 is exercised by the website's own tests.
 """
 

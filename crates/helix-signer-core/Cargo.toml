@@ -1,6 +1,6 @@
 [package]
 name = "helix-signer-core"
-description = "Awake Helix Signer core: plan verification, keys, EIP-7702 signing, chain, website and companion."
+description = "Anubis Automation Script Signer core: plan verification, keys, EIP-7702 signing, chain, website and companion."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

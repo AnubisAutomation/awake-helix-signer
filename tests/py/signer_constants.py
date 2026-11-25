@@ -75,9 +75,12 @@ RULE_TYPE = "(uint8,address,address,address,uint256,uint256,uint256,uint256,uint
 INSTALL_SIGNATURE = f"installPolicyGrant(bytes32,{GRANT_TYPE},{RULE_TYPE}[])"
 INSTALL_TYPES = ("bytes32", GRANT_TYPE, f"{RULE_TYPE}[]")
 REVOKE_SIGNATURES = {"policy": "revokePolicyGrant(bytes32)", "session": "revokeGrant(bytes32)"}
-PLAN_SCHEMA = "awake-helix-signer-plan/2"
+PLAN_SCHEMA = "anubisauto-signer-plan/2"
+REVOKE_PLAN_SCHEMA = "anubisauto-signer-plan/1"
+# The signers before 0.7.0 used these; revocations still accept them.
+LEGACY_REVOKE_PLAN_SCHEMAS = ("awake-helix-signer-plan/1", "awake-helix-signer-plan/2")
 ATTESTATION_VERSION = 1
-ATTESTATION_NAME = "Awake Helix Session Key Attestation"
+ATTESTATION_NAME = "Anubis Automation Session Key Attestation"
 ATTESTATION_DOMAIN_VERSION = "1"
 
 

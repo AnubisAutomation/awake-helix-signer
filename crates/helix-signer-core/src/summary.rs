@@ -313,7 +313,7 @@ fn is_official(api: &str) -> bool {
 
 impl Summary {
     fn header(&self) -> Vec<String> {
-        let mut lines = vec![format!("Awake Helix Signer {}", self.signer_version)];
+        let mut lines = vec![format!("Anubis Automation Script Signer {}", self.signer_version)];
         if let Some(api) = &self.website {
             let warn = if self.official_website { "" } else { "   <-- NOT the official site; continue only if you trust it" };
             lines.push(format!("Website (plan source): {api}{warn}"));
@@ -372,7 +372,7 @@ impl Summary {
             lines.push("Value:       0 (no native value is sent)".into());
             lines.push(format!("Gas:         paid in {} by the owner; balance {}", c::GAS_SYMBOL, self.balance));
             lines.push("The bot can only make these calls, within these limits, until the expiry.".into());
-            lines.push("You can revoke the grant at any time (awake-helix-signer revoke).".into());
+            lines.push("You can revoke the grant at any time (anubisauto-signer revoke).".into());
         }
         if let Some(revoke) = &self.revoke {
             lines.push(format!("Grant ID:    {} ({} grant)", revoke.grant_id, revoke.grant_kind.as_str()));

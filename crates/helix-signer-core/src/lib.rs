@@ -1,4 +1,4 @@
-//! Awake Helix Signer core: verify hosted-bot plans against pinned constants,
+//! Anubis Automation Script Signer core: verify hosted-bot plans against pinned constants,
 //! show exactly what will be signed, sign EIP-7702 authorizations and grant
 //! transactions with the owner's key on this device, broadcast them to Anubis
 //! Chain 6714, and talk to the website (plans, reports, login, grants) and to
@@ -34,7 +34,7 @@ pub mod summary;
 pub mod tx;
 pub mod website;
 
-/// Version of the signer (``awake-helix-signer --version``).
+/// Version of the signer (``anubisauto-signer --version``).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use address::Address;

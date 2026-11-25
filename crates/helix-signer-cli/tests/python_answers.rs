@@ -16,18 +16,33 @@
 //! grant plan naming the version 1 Diamond (now refused as such before its
 //! attestation is checked), and the five grants with a rule of kind 10 or 11
 //! (no longer an unknown kind: refused as not on the Origin allow-list).
+//!
+//! Signer 0.7.0 (renamed Anubis Automation Script Signer) migrated the
+//! recording to the new names, mechanically: the texts the signer writes (its
+//! name, `anubisauto-signer revoke`, the link refusals); grant plans name
+//! `anubisauto-signer-plan/2`; every session key attestation is signed again
+//! under the new EIP-712 domain name with the same test key and fields (the
+//! one signed by a key the recorder made up, by a fixed foreign test key that
+//! its refusal now names), and the attestation known answers were recomputed;
+//! the revocation calls the signer builds name `anubisauto-signer-plan/1`. The
+//! revoke plans and links are kept as recorded, with the legacy
+//! `awake-helix-signer-plan/1`, `/2` and `awakehelix://` names the signer still
+//! accepts, and each is repeated with the new names (2223 cases from 1831).
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
+/// The first line of every summary: the signer's name and version.
+const NAME: &str = "Anubis Automation Script Signer ";
+
 fn normalize(value: &mut Value) {
     match value {
         Value::String(text) => {
-            if let Some(start) = text.find("Awake Helix Signer ") {
-                let end = text[start + 19..].find('\n').map(|index| start + 19 + index).unwrap_or(text.len());
-                text.replace_range(start..end, "Awake Helix Signer <version>");
+            if let Some(start) = text.find(NAME) {
+                let end = text[start + NAME.len()..].find('\n').map(|index| start + NAME.len() + index).unwrap_or(text.len());
+                text.replace_range(start..end, &format!("{NAME}<version>"));
             }
         }
         Value::Array(items) => items.iter_mut().for_each(normalize),

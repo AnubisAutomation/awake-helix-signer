@@ -19,7 +19,7 @@ use crate::pyfmt::py_str;
 
 /// User-Agent of every request.
 pub fn user_agent() -> String {
-    format!("awake-helix-signer/{}", crate::VERSION)
+    format!("anubisauto-signer/{}", crate::VERSION)
 }
 
 /// Largest JSON answer read.

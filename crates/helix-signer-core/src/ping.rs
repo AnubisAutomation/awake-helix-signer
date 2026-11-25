@@ -1,4 +1,4 @@
-//! Answer the website's install check (``awakehelix://ping?token=…&api=…``).
+//! Answer the website's install check (``anubisauto://ping?token=…&api=…``).
 //!
 //! The website cannot see which apps a computer has, so its "I have installed
 //! it, verify" button creates a 10-minute check and opens the ping link. The
@@ -16,7 +16,7 @@ use crate::net::{http_json, validate_url, HttpClient};
 use crate::plan::is_token;
 
 /// Text shown after a confirmed check.
-pub const LINKED: &str = "Awake Helix Signer is installed and linked \u{2014} you can return to the browser.";
+pub const LINKED: &str = "Anubis Automation Script Signer is installed and linked \u{2014} you can return to the browser.";
 
 /// A confirmed install check.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -34,7 +34,7 @@ pub struct PingResult {
 impl PingResult {
     /// Text shown in the window or terminal.
     pub fn message(&self) -> String {
-        format!("{LINKED}\n(awake-helix-signer {}, {}/{}, {})", self.version, self.os, self.arch, self.api)
+        format!("{LINKED}\n(anubisauto-signer {}, {}/{}, {})", self.version, self.os, self.arch, self.api)
     }
 }
 
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn system_and_cpu_names_are_the_websites() {
-        // The Awake Helix website's install check accepts exactly these.
+        // The Anubis Automation website's install check accepts exactly these.
         assert!(["windows", "macos", "linux", "android", "ios"].contains(&system_name()));
         assert!(["x86_64", "arm64"].contains(&cpu_name()));
         if cfg!(target_os = "linux") {

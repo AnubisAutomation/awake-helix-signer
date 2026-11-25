@@ -147,7 +147,7 @@ pub fn revoke_plan(owner: &Address, grant_id: &str, kind: GrantKind) -> Value {
 /// A revoke plan naming a Diamond (the website names the wallet's own).
 pub fn revoke_plan_naming(owner: &Address, grant_id: &str, kind: GrantKind, implementation: &str) -> Value {
     json!({
-        "schema": "awake-helix-signer-plan/1", "kind": "revoke", "chainId": 6714, "owner": owner.to_checksum(),
+        "schema": c::REVOKE_PLAN_SCHEMA, "kind": "revoke", "chainId": 6714, "owner": owner.to_checksum(),
         "implementation": implementation, "to": owner.to_checksum(), "value": "0x0", "grantId": grant_id,
         "grantKind": kind.as_str(), "data": format!("{}{}", c::revoke_selector(kind), &grant_id[2..]),
     })

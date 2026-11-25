@@ -1,11 +1,14 @@
-//! Register a program as the handler of ``awakehelix://`` links.
+//! Register a program as the handler of ``anubisauto://`` links and of the
+//! legacy scheme of the signers before 0.7.0 (both in
+//! [`crate::links::SCHEMES`]), so old links and QR codes open it too.
 //!
-//! * Linux: a ``.desktop`` entry with ``MimeType=x-scheme-handler/awakehelix``
-//!   in ``~/.local/share/applications`` and ``xdg-mime default``. Inside an
-//!   AppImage the entry runs the AppImage file itself (``$APPIMAGE``).
-//! * Windows: ``HKEY_CURRENT_USER\Software\Classes\awakehelix`` (per user, no
-//!   administrator rights).
-//! * macOS: the app bundle declares the scheme in ``Info.plist``
+//! * Linux: a ``.desktop`` entry with ``MimeType=x-scheme-handler/<scheme>;``
+//!   for both schemes in ``~/.local/share/applications`` and ``xdg-mime
+//!   default``. Inside an AppImage the entry runs the AppImage file itself
+//!   (``$APPIMAGE``).
+//! * Windows: ``HKEY_CURRENT_USER\Software\Classes\<scheme>`` for both
+//!   schemes (per user, no administrator rights).
+//! * macOS: the app bundle declares the schemes in ``Info.plist``
 //!   (``CFBundleURLTypes``); ``register`` re-registers the bundle with
 //!   ``lsregister``.
 //!
@@ -18,15 +21,17 @@ use std::process::Command;
 use crate::error::{Error, Result};
 
 /// Desktop entry file name.
-pub const DESKTOP_ID: &str = "awakehelix-signer.desktop";
-/// MIME type of the scheme.
-pub const MIME: &str = "x-scheme-handler/awakehelix";
-/// Per-user registry key.
-pub const WINDOWS_KEY: &str = r"Software\Classes\awakehelix";
+pub const DESKTOP_ID: &str = "anubisauto-signer.desktop";
+/// MIME types of the schemes ([`crate::links::SCHEMES`], the primary one first).
+pub const MIMES: [&str; 2] = ["x-scheme-handler/anubisauto", "x-scheme-handler/awakehelix"];
+/// Per-user registry keys of the schemes (the primary one first).
+pub const WINDOWS_KEYS: [&str; 2] = [r"Software\Classes\anubisauto", r"Software\Classes\awakehelix"];
+/// Name of the icon the desktop entry shows.
+pub const ICON_NAME: &str = "anubisauto-signer";
 /// macOS Launch Services tool.
 pub const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
-/// Registers and removes the ``awakehelix://`` handler.
+/// Registers and removes the handler of the link schemes.
 pub trait UrlSchemeRegistrar: Send + Sync {
     /// Register; returns what was done.
     fn register(&self) -> Result<String>;
@@ -44,7 +49,7 @@ pub fn appimage() -> Option<PathBuf> {
 /// The file users start: the AppImage, else this executable.
 pub fn program() -> PathBuf {
     appimage().unwrap_or_else(|| {
-        std::env::current_exe().and_then(|path| path.canonicalize()).unwrap_or_else(|_| PathBuf::from("awake-helix-signer"))
+        std::env::current_exe().and_then(|path| path.canonicalize()).unwrap_or_else(|_| PathBuf::from(crate::integrate::COMMAND))
     })
 }
 
@@ -61,12 +66,12 @@ pub fn desktop_entry(command: &[String], terminal: bool) -> String {
     [
         "[Desktop Entry]".to_string(),
         "Type=Application".into(),
-        "Name=Awake Helix Signer".into(),
-        "Comment=Verify and sign Awake Helix hosted-bot authorizations locally".into(),
+        "Name=Anubis Automation Script Signer".into(),
+        "Comment=Verify and sign Anubis Automation hosted-bot authorizations locally".into(),
         format!("Exec={} %u", exec.join(" ")),
-        "Icon=awake-helix-signer".into(),
+        format!("Icon={ICON_NAME}"),
         format!("Terminal={}", if terminal { "true" } else { "false" }),
-        format!("MimeType={MIME};"),
+        format!("MimeType={};", MIMES.join(";")),
         "Categories=Utility;".into(),
         String::new(),
     ]
@@ -109,7 +114,7 @@ impl LinuxRegistrar {
 
     /// Path of the icon written next to it.
     pub fn icon(&self) -> PathBuf {
-        self.data_home().join("icons/hicolor/256x256/apps/awake-helix-signer.png")
+        self.data_home().join(format!("icons/hicolor/256x256/apps/{ICON_NAME}.png"))
     }
 }
 
@@ -130,8 +135,8 @@ impl UrlSchemeRegistrar for LinuxRegistrar {
             done.push(format!("icon not written: {error}"));
         }
         if which("xdg-mime") {
-            let _ = Command::new("xdg-mime").args(["default", DESKTOP_ID, MIME]).status();
-            done.push(format!("xdg-mime default {DESKTOP_ID} {MIME}"));
+            let _ = Command::new("xdg-mime").arg("default").arg(DESKTOP_ID).args(MIMES).status();
+            done.push(format!("xdg-mime default {DESKTOP_ID} {}", MIMES.join(" ")));
         } else {
             done.push("xdg-mime not found: set the handler in your desktop settings".into());
         }
@@ -159,7 +164,7 @@ impl UrlSchemeRegistrar for LinuxRegistrar {
     }
 }
 
-/// ``HKCU\Software\Classes\awakehelix`` registration.
+/// ``HKCU\Software\Classes\<scheme>`` registration of both schemes.
 #[derive(Clone, Debug)]
 pub struct WindowsRegistrar {
     /// Handler command (``"%1"`` is appended).
@@ -181,29 +186,33 @@ impl UrlSchemeRegistrar for WindowsRegistrar {
         use winreg::RegKey;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let io = |error: std::io::Error| Error::io(error.to_string());
-        let (key, _) = hkcu.create_subkey(WINDOWS_KEY).map_err(io)?;
-        key.set_value("", &"URL:Awake Helix Signer").map_err(io)?;
-        key.set_value("URL Protocol", &"").map_err(io)?;
-        let (command, _) = hkcu.create_subkey(format!(r"{WINDOWS_KEY}\shell\open\command")).map_err(io)?;
         let line = self.command_line();
-        command.set_value("", &line).map_err(io)?;
-        Ok(format!(r"registered HKCU\{WINDOWS_KEY} -> {line}"))
+        for scheme_key in WINDOWS_KEYS {
+            let (key, _) = hkcu.create_subkey(scheme_key).map_err(io)?;
+            key.set_value("", &"URL:Anubis Automation Script Signer").map_err(io)?;
+            key.set_value("URL Protocol", &"").map_err(io)?;
+            let (command, _) = hkcu.create_subkey(format!(r"{scheme_key}\shell\open\command")).map_err(io)?;
+            command.set_value("", &line).map_err(io)?;
+        }
+        Ok(format!(r"registered HKCU\{} -> {line}", WINDOWS_KEYS.join(r", HKCU\")))
     }
 
     fn unregister(&self) -> Result<String> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        for sub in [r"\shell\open\command", r"\shell\open", r"\shell", ""] {
-            let _ = hkcu.delete_subkey(format!("{WINDOWS_KEY}{sub}"));
+        for scheme_key in WINDOWS_KEYS {
+            for sub in [r"\shell\open\command", r"\shell\open", r"\shell", ""] {
+                let _ = hkcu.delete_subkey(format!("{scheme_key}{sub}"));
+            }
         }
-        Ok(format!(r"removed HKCU\{WINDOWS_KEY}"))
+        Ok(format!(r"removed HKCU\{}", WINDOWS_KEYS.join(r", HKCU\")))
     }
 
     fn registration(&self) -> Option<String> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
-        let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(format!(r"{WINDOWS_KEY}\shell\open\command")).ok()?;
+        let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey(format!(r"{}\shell\open\command", WINDOWS_KEYS[0])).ok()?;
         key.get_value::<String, _>("").ok()
     }
 }
@@ -238,7 +247,7 @@ pub fn bundle_of(executable: &Path) -> Option<PathBuf> {
 impl UrlSchemeRegistrar for MacosRegistrar {
     fn register(&self) -> Result<String> {
         let Some(bundle) = &self.bundle else {
-            return Ok("On macOS the awakehelix:// scheme is declared by the app bundle (Info.plist). Move 'Awake Helix Signer.app' to /Applications and open it once.".into());
+            return Ok("On macOS the anubisauto:// scheme is declared by the app bundle (Info.plist). Move 'Anubis Automation Script Signer.app' to /Applications and open it once.".into());
         };
         if Path::new(LSREGISTER).exists() {
             let _ = Command::new(LSREGISTER).arg("-f").arg(bundle).status();
@@ -247,7 +256,7 @@ impl UrlSchemeRegistrar for MacosRegistrar {
     }
 
     fn unregister(&self) -> Result<String> {
-        Ok("Delete 'Awake Helix Signer.app' to remove the macOS registration.".into())
+        Ok("Delete 'Anubis Automation Script Signer.app' to remove the macOS registration.".into())
     }
 
     fn registration(&self) -> Option<String> {
@@ -261,11 +270,11 @@ pub struct ManifestRegistrar;
 
 impl UrlSchemeRegistrar for ManifestRegistrar {
     fn register(&self) -> Result<String> {
-        Ok("The awakehelix:// scheme is declared by the app's manifest on this platform.".into())
+        Ok("The anubisauto:// scheme is declared by the app's manifest on this platform.".into())
     }
 
     fn unregister(&self) -> Result<String> {
-        Ok("Uninstall the app to remove the awakehelix:// registration.".into())
+        Ok("Uninstall the app to remove the anubisauto:// registration.".into())
     }
 
     fn registration(&self) -> Option<String> {
@@ -293,12 +302,29 @@ mod tests {
 
     #[test]
     fn desktop_entry_quotes_like_shlex() {
-        let text = desktop_entry(&["/opt/Awake Helix/signer".to_string()], false);
-        assert!(text.contains("MimeType=x-scheme-handler/awakehelix;"));
-        assert!(text.contains("Exec='/opt/Awake Helix/signer' %u"));
+        let text = desktop_entry(&["/opt/Anubis Automation/signer".to_string()], false);
+        assert!(text.contains("MimeType=x-scheme-handler/anubisauto;x-scheme-handler/awakehelix;"));
+        assert!(text.contains("Exec='/opt/Anubis Automation/signer' %u"));
+        assert!(text.contains("Name=Anubis Automation Script Signer\n"));
+        assert!(text.contains("Icon=anubisauto-signer\n"));
         assert!(text.contains("Terminal=false"));
-        assert!(desktop_entry(&["/usr/bin/awake-helix-signer".into(), "open".into()], true).contains("Exec=/usr/bin/awake-helix-signer open %u"));
+        assert!(desktop_entry(&["/usr/bin/anubisauto-signer".into(), "open".into()], true).contains("Exec=/usr/bin/anubisauto-signer open %u"));
         assert_eq!(WindowsRegistrar { command: vec!["C:\\A B\\x.exe".into()] }.command_line(), "\"C:\\A B\\x.exe\" \"%1\"");
-        assert_eq!(bundle_of(Path::new("/Applications/Awake Helix Signer.app/Contents/MacOS/x")).unwrap(), PathBuf::from("/Applications/Awake Helix Signer.app"));
+        let bundle = "/Applications/Anubis Automation Script Signer.app";
+        assert_eq!(bundle_of(Path::new(&format!("{bundle}/Contents/MacOS/x"))).unwrap(), PathBuf::from(bundle));
+    }
+
+    #[test]
+    fn every_link_scheme_is_registered() {
+        let schemes: Vec<String> = crate::links::SCHEMES.iter().map(|scheme| scheme.to_string()).collect();
+        assert_eq!(MIMES.map(|mime| mime.strip_prefix("x-scheme-handler/").unwrap().to_string()).to_vec(), schemes);
+        assert_eq!(WINDOWS_KEYS.map(|key| key.strip_prefix(r"Software\Classes\").unwrap().to_string()).to_vec(), schemes);
+        assert_eq!(DESKTOP_ID, "anubisauto-signer.desktop");
+        let home = std::env::temp_dir().join("helix-register-test");
+        let registrar = LinuxRegistrar { command: vec!["x".into()], home: Some(home.clone()), terminal: false };
+        if std::env::var_os("XDG_DATA_HOME").is_none() {
+            assert_eq!(registrar.entry(), home.join(".local/share/applications/anubisauto-signer.desktop"));
+            assert_eq!(registrar.icon(), home.join(".local/share/icons/hicolor/256x256/apps/anubisauto-signer.png"));
+        }
     }
 }

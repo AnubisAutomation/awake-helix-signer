@@ -12,13 +12,19 @@ use hmac::{Hmac, Mac};
 use serde_json::json;
 use sha2::Sha256;
 
-// Shared with the Awake Helix website's session key tests
+// Shared with the Anubis Automation website's session key tests
 // (and formerly the Python signer's tests): seed bytes(range(32)), this owner, this bot.
+// The key derivation labels keep their AWAKE_HELIX_ names (they derive the
+// website's keys); the attestation's EIP-712 domain is
+// "Anubis Automation Session Key Attestation" since signer 0.7.0.
 const VECTOR_ATTESTOR: &str = "0xA9BeE92e6C1d43B162D799883E4401485C9a3334";
 const VECTOR_OWNER: &str = "0x1111111111111111111111111111111111111111";
 const VECTOR_BOT: &str = "123e4567-e89b-42d3-a456-426614174000";
 const VECTOR_SESSION_KEY: &str = "0x0AdfFDca6dcc6ad2F86340af27ba616370e69B70";
-const VECTOR_SIGNATURE: &str = "0x80d6cf5a80a39c1c383281c03743c9a850e0bb1e2fefb3860e5e7a3debe717b33244251c624e799a1e43afa435fce5d6352f58b541559050a0b877937b0d773b1c";
+const VECTOR_SIGNATURE: &str = "0xb735d7e90479cf7c5bd33806bce744ac66ec83fdedfa711114fbdb878df8aa2a4e0de9e0a265f30c2529c7a6f65282dd7eed53014e9ed872c8aba54740fa0f381b";
+/// The same attestation signed under the domain name signers before 0.7.0 used
+/// ("Awake Helix Session Key Attestation"): no longer accepted.
+const VECTOR_SIGNATURE_BEFORE_0_7: &str = "0x80d6cf5a80a39c1c383281c03743c9a850e0bb1e2fefb3860e5e7a3debe717b33244251c624e799a1e43afa435fce5d6352f58b541559050a0b877937b0d773b1c";
 
 fn bot_bytes() -> [u8; 16] {
     let mut out = [0u8; 16];
@@ -83,6 +89,19 @@ fn attestation_vector_verifies_against_its_attestor_only() {
 }
 
 #[test]
+fn attestation_under_the_former_domain_name_is_refused() {
+    assert_eq!(c::ATTESTATION_NAME, "Anubis Automation Session Key Attestation");
+    assert_eq!(c::ATTESTATION_DOMAIN_VERSION, "1");
+    let owner = Address::parse(VECTOR_OWNER).unwrap();
+    let session = Address::parse(VECTOR_SESSION_KEY).unwrap();
+    let document = json!({"version": 1, "chainId": 6714, "owner": VECTOR_OWNER, "botId": VECTOR_BOT, "sessionKey": VECTOR_SESSION_KEY, "signature": VECTOR_SIGNATURE_BEFORE_0_7});
+    let mut constants = production();
+    constants.attestation_address = Address::parse(VECTOR_ATTESTOR).unwrap();
+    let error = verify_attestation(Some(&document), &owner, &bot_bytes(), &session, &constants).unwrap_err();
+    assert!(error.message().contains("not by the platform key"), "{error}");
+}
+
+#[test]
 fn typed_data_hash_is_plain_eip712() {
     let word = |value: u64| {
         let mut out = [0u8; 32];
@@ -90,7 +109,7 @@ fn typed_data_hash_is_plain_eip712() {
         out
     };
     let mut domain = keccak(b"EIP712Domain(string name,string version,uint256 chainId)").to_vec();
-    domain.extend_from_slice(&keccak(b"Awake Helix Session Key Attestation"));
+    domain.extend_from_slice(&keccak(b"Anubis Automation Session Key Attestation"));
     domain.extend_from_slice(&keccak(b"1"));
     domain.extend_from_slice(&word(6714));
     let mut message = keccak(b"SessionKeyAttestation(uint256 version,uint256 chainId,address owner,bytes16 botId,address sessionKey)").to_vec();

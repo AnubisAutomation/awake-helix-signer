@@ -62,7 +62,7 @@ HELIX_CODES = (delegation(c.IMPLEMENTATION), delegation(c.IMPLEMENTATION_V1))
 
 def attestation(owner: str, bot_bytes: bytes, session_key: str, *, signer: Any = ATTESTOR,
                 chain_id: int = 6714) -> dict[str, Any]:
-    """Attest a session key as the Awake Helix website does."""
+    """Attest a session key as the Anubis Automation website does."""
     signable = encode_typed_data(
         full_message=attestation_typed_data(chain_id, to_checksum_address(owner), bot_bytes, to_checksum_address(session_key))
     )
@@ -135,10 +135,11 @@ def grant_plan(owner: str, *, now: int | None = None, rules: list[tuple] | None 
     }
 
 
-def revoke_plan(owner: str, grant_id: str, kind: str = "policy", implementation: str = c.IMPLEMENTATION) -> dict[str, Any]:
+def revoke_plan(owner: str, grant_id: str, kind: str = "policy", implementation: str = c.IMPLEMENTATION,
+                schema: str = c.REVOKE_PLAN_SCHEMA) -> dict[str, Any]:
     """A revocation plan as the website serves it (naming the wallet's Diamond)."""
     return {
-        "schema": c.PLAN_SCHEMA,
+        "schema": schema,
         "kind": "revoke",
         "chainId": 6714,
         "owner": owner,

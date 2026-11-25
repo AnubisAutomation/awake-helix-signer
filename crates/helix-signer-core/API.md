@@ -1,6 +1,6 @@
 # helix-signer-core API
 
-The core of the Awake Helix Signer, shared by the `awake-helix-signer` CLI
+The core of the Anubis Automation Script Signer, shared by the `anubisauto-signer` CLI
 (`crates/helix-signer-cli`) and the Tauri app (`app/src-tauri`). It is a port
 of the former Python signer with the same checks,
 messages and wire formats; nothing in it depends on a GUI or a terminal.
@@ -84,17 +84,22 @@ the placeholder address (`constants::ATTESTATION_PLACEHOLDER`).
 any case (like `eth_utils.is_address`), `to_checksum()`/`Display` give EIP-55,
 `to_lower()` gives `0x…` lowercase; it serializes as the checksummed string.
 
-## Links (`awakehelix://`)
+## Links (`anubisauto://`)
 
 ```rust
 pub enum LinkAction { Sign, Revoke, Ping, Grants }   // as_str(); serializes "sign" | ...
 pub struct Link { pub action: LinkAction, pub token: String, pub api: String }
 pub fn parse_link(url: &str, allowed_apis: &[String], development: bool) -> Result<Link>;
+pub mod links { pub const SCHEME: &str;              // "anubisauto": every link made uses it
+    pub const LEGACY_SCHEME: &str;                    // "awakehelix" (signers before 0.7.0): accepted, never made
+    pub const SCHEMES: [&str; 2];                     // both, the primary one first
+    pub fn has_scheme(text: &str) -> bool; }          // starts with one of SCHEMES and ":" (any case)
 ```
 
-The API origin must be the official site, one in `allowed_apis`
-(`--allow-api`), or loopback when `development` is set (dev constants);
-tokens match `^[A-Za-z0-9_-]{22,128}$`.
+Both schemes parse alike (old links and QR codes still open the app); any
+other scheme is refused (`link.notOurs`). The API origin must be the official
+site, one in `allowed_apis` (`--allow-api`), or loopback when `development` is
+set (dev constants); tokens match `^[A-Za-z0-9_-]{22,128}$`.
 
 ## HTTP transport
 
@@ -174,13 +179,17 @@ pub struct RevokePlan { pub owner: Address, pub grant_id: String, pub grant_kind
                         pub data: String, pub implementation: Address /* the wallet's Diamond, v1 or v2 */,
                         pub named_implementation: Option<Address> /* not serialized */, pub plan: Value }
 pub fn verify_grant_plan(plan: &Value, constants: &Constants, now: Option<u64>) -> Result<GrantPlan>;
+        // schema "anubisauto-signer-plan/2" (constants::PLAN_SCHEMA) only;
         // names the version 2 Diamond; rules checked like Helix7702AccountV2 (floors, deadlines, the
         // activation DAI cap, counted kinds); the website's preview matched by kind, method and target
 pub fn verify_revoke_plan(plan: &Value, constants: &Constants) -> Result<RevokePlan>;   // v1 or v2 named
+        // schema "anubisauto-signer-plan/1" or "/2", or the legacy "awake-helix-signer-plan/1" or "/2"
+        // (constants::REVOKE_PLAN_SCHEMAS), so grants made with the old app can still be revoked
 pub fn bind_revoke_delegate(plan: &mut RevokePlan, delegate: Address) -> Result<()>;   // the wallet's own
 pub fn verify_attestation(attestation: Option<&Value>, owner: &Address, bot: &[u8; 16],
                           session_key: &Address, constants: &Constants) -> Result<()>;
 pub fn attestation_digest(chain_id: u64, owner: &Address, bot: &[u8; 16], session_key: &Address) -> [u8; 32];
+        // EIP-712 domain {name: "Anubis Automation Session Key Attestation", version: "1", chainId}
 pub fn offline_revoke(owner: &str, grant_id: &str, kind: &str, constants: &Constants) -> Result<RevokePlan>;
 pub fn check_token(token: &str) -> Result<()>;
 pub fn amount(value: &U256, decimals: u32) -> String;     // Python Decimal formatting: "1.5", "10"
@@ -318,11 +327,11 @@ pub fn website::status_text(status: &str, not_revocable_reason: &str) -> String;
 pub fn check_challenge(message: Option<&str>, owner: &Address, api: &str, chain_id: u64) -> Result<String>;
 ```
 
-## Install check (`awakehelix://ping`)
+## Install check (`anubisauto://ping`)
 
 ```rust
 pub struct PingResult { pub version: String, pub os: String, pub arch: String, pub api: String }
-impl PingResult { pub fn message(&self) -> String; }     // "Awake Helix Signer is installed and linked — …"
+impl PingResult { pub fn message(&self) -> String; }     // "Anubis Automation Script Signer is installed and linked — …"
 pub fn send_ping(api: &str, token: &str, client: &dyn HttpClient) -> Result<PingResult>;
         // sends only {version, os ("windows"|"macos"|"linux"|"android"|"ios"), arch ("x86_64"|"arm64")}
 pub mod ping { pub fn system_name() -> &'static str; pub fn cpu_name() -> &'static str; }
@@ -381,15 +390,17 @@ pub mod register {
     pub trait UrlSchemeRegistrar: Send + Sync { fn register(&self) -> Result<String>;
         fn unregister(&self) -> Result<String>; fn registration(&self) -> Option<String>; }
     pub struct LinuxRegistrar { pub command: Vec<String>, pub home: Option<PathBuf>, pub terminal: bool }
-        // ~/.local/share/applications/awakehelix-signer.desktop + icon + xdg-mime default
-    pub struct WindowsRegistrar { pub command: Vec<String> }    // HKCU\Software\Classes\awakehelix
+        // ~/.local/share/applications/anubisauto-signer.desktop (MimeType: both schemes) + icon + xdg-mime default
+    pub struct WindowsRegistrar { pub command: Vec<String> }    // HKCU\Software\Classes\<scheme>, both schemes
     pub struct MacosRegistrar { pub bundle: Option<PathBuf> }   // Info.plist declares it; lsregister -f
     pub struct ManifestRegistrar;                               // Android/iOS: the app manifest
     pub fn for_this_os(command: Vec<String>, terminal: bool) -> Box<dyn UrlSchemeRegistrar>;
     pub fn desktop_entry(command: &[String], terminal: bool) -> String;
     pub fn program() -> PathBuf;                                // $APPIMAGE, else this executable
 }
-pub mod integrate { pub fn config_dir() -> PathBuf;            // AWAKE_HELIX_SIGNER_HOME wins
+pub mod integrate { pub const COMMAND: &str;                   // "anubisauto-signer"
+    pub fn config_dir() -> PathBuf;   // AWAKE_HELIX_SIGNER_HOME wins; else %APPDATA%\AnubisAutoSigner,
+                                      // ~/Library/Application Support/AnubisAutoSigner, $XDG_CONFIG_HOME/anubisauto-signer
     pub fn install_cli(dir: Option<&Path>, home: Option<&Path>, target: &Path) -> Result<String>;
     pub fn uninstall_cli(target: &Path, home: Option<&Path>) -> String;
     pub fn cli_link(target: &Path, home: Option<&Path>) -> Option<PathBuf>; }
@@ -407,6 +418,7 @@ pub mod icon { pub fn png(size: u32) -> Vec<u8>; pub fn ico(sizes: &[u32]) -> Ve
 * Regex `$` in Python accepted a trailing newline in tokens, grant IDs and
   signatures; the Rust signer does not.
 * Unicode (non-ASCII) digits are not accepted in amounts, calls or expiries.
-* `gui` starts the Awake Helix Signer app next to the CLI when present; a bare
-  `awakehelix://` link argument runs `open` in the terminal, `--register` /
+* `gui` starts the Anubis Automation Script Signer app next to the CLI when
+  present; a bare `anubisauto://` (or legacy `awakehelix://`) link argument
+  runs `open` in the terminal, `--register` /
   `--unregister` / `--selftest` work as before.

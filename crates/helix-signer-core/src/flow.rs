@@ -658,7 +658,7 @@ pub fn execute_revoke(current: &Session, material: KeyMaterial, log: Log) -> Res
 pub fn revoke_call_plan(call: &Value, owner: &Address, grant_id: &str, constants: &Constants) -> Result<RevokePlan> {
     let field = |key: &str| call.get(key).cloned().unwrap_or(Value::Null);
     let plan = json!({
-        "schema": c::PLAN_SCHEMA,
+        "schema": c::REVOKE_PLAN_SCHEMA,
         "kind": "revoke",
         "chainId": field("chainId"),
         "owner": owner.to_checksum(),

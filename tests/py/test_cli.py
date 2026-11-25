@@ -1,9 +1,9 @@
-"""Behaviour of the ``awake-helix-signer`` executable against the HTTP fakes.
+"""Behaviour of the ``anubisauto-signer`` executable against the HTTP fakes.
 
 The cases of the former Python signer's unit tests (signing, the grant
 editor, grants, the install ping and the companion), run against the real
 executable (``HELIX_SIGNER_BIN``, default
-``target/release/awake-helix-signer``) as a user would: secrets on
+``target/release/anubisauto-signer``) as a user would: secrets on
 stdin of a process without a controlling terminal, the website and the chain
 served over loopback HTTP by ``server.py``.
 
@@ -331,11 +331,24 @@ class SignTests(CliCase):
     def test_open_link(self) -> None:
         self.site.plans[fakes.TOKEN] = fakes.grant_plan(self.owner)
         api = self.world.fake.url.replace(":", "%3A").replace("/", "%2F")
-        result = self.cli(["open", f"awakehelix://sign?plan={fakes.TOKEN}&api={api}", *self.world.network, *self.keystore()], [self.world.password, "AUTHORIZE"])
+        result = self.cli(["open", f"anubisauto://sign?plan={fakes.TOKEN}&api={api}", *self.world.network, *self.keystore()], [self.world.password, "AUTHORIZE"])
         self.assertEqual(result.code, 0, result)
-        result = self.cli([f"awakehelix://sign?plan={fakes.TOKEN}&api=https%3A%2F%2Fevil.example", *self.world.network, *self.keystore()], [])
-        self.assertEqual(result.code, 2, result)
-        self.assertIn("not the official Awake Helix website", result.stdout)
+        for scheme in ("anubisauto", "awakehelix", "AwakeHelix"):
+            result = self.cli([f"{scheme}://sign?plan={fakes.TOKEN}&api=https%3A%2F%2Fevil.example", *self.world.network, *self.keystore()], [])
+            self.assertEqual(result.code, 2, result)
+            self.assertIn("not the official Anubis Automation website", result.stdout)
+        for url in (f"anubisautox://sign?plan={fakes.TOKEN}", f"awake-helix://sign?plan={fakes.TOKEN}", f"https://anubis.sivilization.com/sign?plan={fakes.TOKEN}"):
+            result = self.cli(["open", url, *self.world.network, *self.keystore()], [])
+            self.assertEqual(result.code, 2, result)
+            self.assertIn("Not an anubisauto:// link.", result.stdout)
+
+    def test_open_legacy_link(self) -> None:
+        """A link of the signers before 0.7.0 (awakehelix://) still signs."""
+        self.site.plans[fakes.TOKEN] = fakes.grant_plan(self.owner)
+        api = self.world.fake.url.replace(":", "%3A").replace("/", "%2F")
+        result = self.cli([f"awakehelix://sign?plan={fakes.TOKEN}&api={api}", *self.world.network, *self.keystore()], [self.world.password, "AUTHORIZE"])
+        self.assertEqual(result.code, 0, result)
+        self.assertIn("Anubis Automation Script Signer ", result.stdout)
 
     def test_bad_private_key_error_does_not_echo(self) -> None:
         secret = "f" * 63 + "g"
@@ -445,6 +458,32 @@ class RevokeTests(CliCase):
         result = self.cli(offline, [self.world.private_key])
         self.assertEqual(result.code, 2, result)
         self.assertIn("not active on chain", result.stdout)
+
+    def test_revoke_plans_in_every_accepted_schema(self) -> None:
+        """Revocations accept the new schemas and those of the signers before 0.7.0."""
+        self.chain.delegate(self.owner)
+        schemas = (c.REVOKE_PLAN_SCHEMA, c.PLAN_SCHEMA, *c.LEGACY_REVOKE_PLAN_SCHEMAS)
+        self.assertEqual(schemas, ("anubisauto-signer-plan/1", "anubisauto-signer-plan/2", "awake-helix-signer-plan/1", "awake-helix-signer-plan/2"))
+        for index, schema in enumerate(schemas):
+            grant, token = "0x" + f"{index + 1:02x}" * 32, "tok_" + "CDEF"[index] * 40
+            self.chain.policy.setdefault(self.owner.lower(), {})[grant] = fakes.SESSION_KEY.lower()
+            self.site.plans[token] = fakes.revoke_plan(self.owner, grant, schema=schema)
+            result = self.cli(["revoke", "--plan", token, *self.world.api, *self.world.network, *self.keystore()], [self.world.password, "REVOKE"])
+            self.assertEqual(result.code, 0, (schema, result))
+            self.assertNotIn(grant, self.chain.policy[self.owner.lower()])
+        self.site.plans["tok_" + "G" * 40] = fakes.revoke_plan(self.owner, "0x" + "09" * 32, schema="awake-helix-signer-plan/3")
+        result = self.cli(["revoke", "--plan", "tok_" + "G" * 40, *self.world.api, *self.world.network, *self.keystore()], [self.world.password])
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("Unsupported plan schema 'awake-helix-signer-plan/3'", result.stdout)
+
+    def test_grant_plans_name_only_the_new_schema(self) -> None:
+        for index, schema in enumerate(("awake-helix-signer-plan/2", c.REVOKE_PLAN_SCHEMA)):
+            token = "tok_" + "HJ"[index] * 40
+            self.site.plans[token] = {**fakes.grant_plan(self.owner), "schema": schema}
+            result = self.sign(*self.keystore(), lines=[self.world.password, "AUTHORIZE"], token=token)
+            self.assertEqual(result.code, 2, (schema, result))
+            self.assertIn(f"Unsupported plan schema '{schema}'", result.stdout)
+        self.assertEqual(self.chain.sent, [])
 
     def test_revoke_of_an_undelegated_account_without_the_grant(self) -> None:
         self.site.plans[fakes.TOKEN] = fakes.revoke_plan(self.owner, "0x" + "cd" * 32)
@@ -626,7 +665,7 @@ class GrantsTests(CliCase):
     def test_open_grants_link_and_scan(self) -> None:
         self.backend.scan_pages = 1
         api = self.world.fake.url.replace(":", "%3A").replace("/", "%2F")
-        result = self.cli(["open", f"awakehelix://grants?api={api}", *self.world.network, "--private-key"], [self.world.private_key])
+        result = self.cli(["open", f"anubisauto://grants?api={api}", *self.world.network, "--private-key"], [self.world.private_key])
         self.assertEqual(result.code, 0, result)
         self.assertIn(GRANT_A, result.stdout)
         self.assertIn("scanning the install history (50%)", result.stdout)
@@ -639,21 +678,21 @@ class GrantsTests(CliCase):
 
 
 class PingTests(CliCase):
-    """``ping`` and ``open awakehelix://ping``."""
+    """``ping`` and ``open anubisauto://ping`` (and the legacy scheme)."""
 
     TOKEN = "chk_" + "Q" * 40
 
     def test_ping(self) -> None:
         result = self.cli(["ping", "--token", self.TOKEN, *self.world.api])
         self.assertEqual(result.code, 0, result)
-        self.assertIn("Awake Helix Signer is installed and linked — you can return to the browser.", result.stdout)
+        self.assertIn("Anubis Automation Script Signer is installed and linked — you can return to the browser.", result.stdout)
         token, body = self.world.fake.pings[0]
         self.assertEqual(token, self.TOKEN)
         self.assertEqual(set(body), {"version", "os", "arch"})
         self.assertEqual(body["version"], VERSION)
         method, _, headers, _ = self.world.fake.log[-1]
         self.assertEqual(method, "POST")
-        self.assertEqual(headers.get("User-Agent"), f"awake-helix-signer/{VERSION}")
+        self.assertEqual(headers.get("User-Agent"), f"anubisauto-signer/{VERSION}")
         self.assertEqual(headers.get("Content-Type"), "application/json")
         for status, fragment in ((404, "does not know"), (409, "already confirmed"), (410, "expired"), (429, "Too many"), (500, "refused")):
             self.world.fake.ping_status = status
@@ -668,12 +707,14 @@ class PingTests(CliCase):
 
     def test_open_ping_link(self) -> None:
         api = self.world.fake.url.replace(":", "%3A").replace("/", "%2F")
-        result = self.cli(["open", f"awakehelix://ping?token={self.TOKEN}&api={api}", *self.world.network])
-        self.assertEqual(result.code, 0, result)
-        refused = self.cli(["open", f"awakehelix://ping?token={self.TOKEN}&api=https%3A%2F%2Fevil.example"])
-        self.assertEqual(refused.code, 2, refused)
-        self.assertIn("not the official", refused.stdout)
-        self.assertEqual(len(self.world.fake.pings), 1)
+        for scheme in ("anubisauto", "awakehelix"):
+            result = self.cli(["open", f"{scheme}://ping?token={self.TOKEN}&api={api}", *self.world.network])
+            self.assertEqual(result.code, 0, result)
+            self.assertIn(f"(anubisauto-signer {VERSION}, ", result.stdout)
+            refused = self.cli(["open", f"{scheme}://ping?token={self.TOKEN}&api=https%3A%2F%2Fevil.example"])
+            self.assertEqual(refused.code, 2, refused)
+            self.assertIn("not the official", refused.stdout)
+        self.assertEqual(len(self.world.fake.pings), 2)
 
 
 class KeystoreAndMiscTests(CliCase):
@@ -707,7 +748,7 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(signed.code, 0, signed)
 
     def test_version_help_status(self) -> None:
-        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), f"awake-helix-signer {VERSION}")
+        self.assertEqual(harness.run(BIN, ["--version"]).stdout.strip(), f"anubisauto-signer {VERSION}")
         self.assertEqual(harness.run(BIN, ["--version", "sign"]).code, 0)
         help_text = harness.run(BIN, ["--help"])
         self.assertEqual(help_text.code, 0)
@@ -716,8 +757,8 @@ class KeystoreAndMiscTests(CliCase):
         self.assertEqual(harness.run(BIN, []).code, 2)
         status = harness.run(BIN, ["status"])
         self.assertEqual(status.code, 0, status)
-        self.assertIn(f"awake-helix-signer {VERSION}", status.stdout)
-        self.assertIn("awakehelix:// handler:", status.stdout)
+        self.assertIn(f"anubisauto-signer {VERSION}", status.stdout)
+        self.assertIn("anubisauto:// handler:", status.stdout)
         self.assertEqual(harness.run(BIN, ["--selftest"]).code, 0)
 
     def test_register_writes_a_desktop_entry(self) -> None:
@@ -725,16 +766,18 @@ class KeystoreAndMiscTests(CliCase):
         env = {**harness.environment(), "HOME": str(home), "XDG_DATA_HOME": "", "PATH": "/usr/bin:/bin"}
         result = harness.run(BIN, ["register"], env=env)
         self.assertEqual(result.code, 0, result)
-        entry = home / ".local/share/applications/awakehelix-signer.desktop"
-        self.assertIn("MimeType=x-scheme-handler/awakehelix;", entry.read_text())
-        self.assertTrue((home / ".local/share/icons/hicolor/256x256/apps/awake-helix-signer.png").read_bytes().startswith(b"\x89PNG"))
-        self.assertIn("awakehelix:// handler:", harness.run(BIN, ["status"], env=env).stdout)
+        entry = home / ".local/share/applications/anubisauto-signer.desktop"
+        text = entry.read_text()
+        self.assertIn("MimeType=x-scheme-handler/anubisauto;x-scheme-handler/awakehelix;", text)
+        self.assertIn("Name=Anubis Automation Script Signer\n", text)
+        self.assertTrue((home / ".local/share/icons/hicolor/256x256/apps/anubisauto-signer.png").read_bytes().startswith(b"\x89PNG"))
+        self.assertIn("anubisauto:// handler:", harness.run(BIN, ["status"], env=env).stdout)
         self.assertEqual(harness.run(BIN, ["unregister"], env=env).code, 0)
         self.assertFalse(entry.exists())
         link_dir = home / "bin"
         installed = harness.run(BIN, ["install-cli", "--dir", str(link_dir)], env=env)
         self.assertEqual(installed.code, 0, installed)
-        self.assertTrue((link_dir / "awake-helix-signer").is_symlink())
+        self.assertTrue((link_dir / "anubisauto-signer").is_symlink())
 
 
 def free_port() -> int:
@@ -812,7 +855,7 @@ class CompanionTests(CliCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], SITE)
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual((body["name"], body["paired"], body["chainId"], body["version"], body["keyLoaded"], body["owner"]),
-                         ("awake-helix-signer", False, 6714, VERSION, True, self.owner))
+                         ("anubisauto-signer", False, 6714, VERSION, True, self.owner))
         self.assertTrue(body["constantsHash"].startswith("0x"))
         for origin in ("https://evil.example", "https://anubis.sivilization.com.evil.example", "null", None):
             status, headers, _ = self.request("GET", "/health", origin=origin)
