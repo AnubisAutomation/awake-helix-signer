@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.7.0
+
+The signer is renamed **Anubis Automation Script Signer** (formerly the
+Awake Helix Signer). What it verifies and signs does not change.
+
+- **It is a new app.** The app identifier is now
+  `com.sivilization.anubisauto.signer` (was `com.sivilization.awakehelix.signer`):
+  the Android package and the iOS / macOS bundle identifier change, so 0.7.0
+  installs next to the old app instead of updating it, and nothing the old
+  app or the old command line stored carries over (its app data, settings
+  folder, paired browsers, remembered language and theme, link registration
+  and terminal command). Set it up again: load your key, pair the dashboard,
+  register links, install the terminal command; then uninstall the old app.
+  Keystore files you saved yourself stay where they are, and grants on chain
+  are unaffected: grants made with the old app are revoked from the new one.
+- Links: everything the app and the command line make uses `anubisauto://`
+  (`anubisauto://sign`, `://revoke`, `://grants`, `://ping`). The old
+  `awakehelix://` links still open the app, so old links and QR codes keep
+  working; both schemes are registered on every platform (Windows registry,
+  Linux desktop file, macOS and iOS `Info.plist`, Android intent filter) and
+  parsed alike. Any other scheme or look-alike is refused as before.
+- Names: the command is `anubisauto-signer` (installer PATH, `.deb`
+  `/usr/bin/anubisauto-signer`, `install-cli` symlink), the app binary
+  `anubisauto-signer-app`, the desktop entry `anubisauto-signer.desktop`, the
+  settings folder `AnubisAutoSigner` (Windows, macOS) or
+  `~/.config/anubisauto-signer` (Linux), the HTTP User-Agent
+  `anubisauto-signer/<version>` and the companion's `name`. Release files are
+  `anubisauto-signer-<version>-<platform>…` (with `SHA256SUMS` and
+  `manifest.json` naming them). The window title, the texts in all six
+  languages, the install check ("… is installed and linked") and the
+  summaries use the new name.
+- Protocol: grant plans must name the schema `anubisauto-signer-plan/2`;
+  revocation plans may name `anubisauto-signer-plan/1` or `/2`, or the former
+  `awake-helix-signer-plan/1` or `/2`, so grants made with the old app can
+  still be revoked. The session key attestation's EIP-712 domain name is
+  "Anubis Automation Session Key Attestation" (version "1"); an attestation
+  under the former name is refused. The website changes to match.
+- Builds: the Docker images, volumes and BuildKit builder of `build.sh` /
+  `build.ps1` are named `anubisauto-signer-*` (`clean` no longer sees the
+  caches of earlier versions). The Android release keystore keeps its folder
+  (`~/.awake-helix-signing/`); without `HELIX_ANDROID_KEY_ALIAS` its only key
+  is used, and a release build checks that the APK is signed with that key's
+  certificate. A `src-tauri/gen` Android or Xcode project generated for the
+  former identifier is generated again.
+
 ## 0.6.0
 
 - The pinned delegate is the version 2 Helix7702 Diamond

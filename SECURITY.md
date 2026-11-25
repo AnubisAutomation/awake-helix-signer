@@ -18,8 +18,8 @@ session cookie.
 
 | Version | Supported |
 |---|---|
-| 0.5.x | yes |
-| < 0.5 | no |
+| 0.7.x | yes |
+| < 0.7 | no |
 
 ## Verifying releases
 

@@ -1,14 +1,19 @@
-# Awake Helix Signer
+# Anubis Automation Script Signer
 
-The Awake Helix Signer authorizes and revokes the policy grants that let an
-[Awake Helix](https://anubis.sivilization.com) bot act for your wallet on
-Anubis Chain (chain ID 6714). Mainstream wallets refuse to sign an EIP-7702
-delegation to a contract chosen by a website, so this small program does it on
-your own device, after checking every value itself.
+The Anubis Automation Script Signer authorizes and revokes the policy grants
+that let an [Anubis Automation](https://anubis.sivilization.com) hosted bot act
+for your wallet on Anubis Chain (chain ID 6714). Mainstream wallets refuse to
+sign an EIP-7702 delegation to a contract chosen by a website, so this small
+program does it on your own device, after checking every value itself.
+
+Version 0.7.0 renamed the app: it installs as a new app (identifier
+`com.sivilization.anubisauto.signer`), so set it up again; links made for
+older versions (`awakehelix://`) still open it, and grants made with them can
+still be revoked. See the [CHANGELOG](CHANGELOG.md).
 
 - `crates/helix-signer-core`: plan verification, keys, EIP-7702 signing, chain
   and website client, the local companion (API: [`API.md`](crates/helix-signer-core/API.md)).
-- `crates/helix-signer-cli`: the `awake-helix-signer` command line.
+- `crates/helix-signer-cli`: the `anubisauto-signer` command line.
 - `app/`: the Tauri 2 app for Windows, macOS, Linux, Android and iOS (six
   languages, light and dark).
 
@@ -38,8 +43,9 @@ your own device, after checking every value itself.
   authorization shows a summary decoded from the calldata and needs you to
   type `AUTHORIZE` (`REVOKE` for revocations).
 - **Wrong chain or RPC is refused** (`eth_chainId`, delegate code hash), remote
-  RPC and API must use HTTPS, and `awakehelix://` links naming another website
-  are rejected. Use a dedicated bot wallet.
+  RPC and API must use HTTPS, and `anubisauto://` links (or legacy
+  `awakehelix://` ones) naming another website are rejected. Use a dedicated
+  bot wallet.
 
 Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
@@ -50,10 +56,10 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 | System | File |
 |---|---|
-| Windows x64 | `awake-helix-signer-<version>-windows-x64-setup.exe` (CLI only: `-windows-x64-cli.exe`) |
-| macOS (universal) | `awake-helix-signer-<version>-macos-universal.dmg` (CLI: `-macos-universal-cli.tar.gz`) |
+| Windows x64 | `anubisauto-signer-<version>-windows-x64-setup.exe` (CLI only: `-windows-x64-cli.exe`) |
+| macOS (universal) | `anubisauto-signer-<version>-macos-universal.dmg` (CLI: `-macos-universal-cli.tar.gz`) |
 | Linux x86_64 | `.deb` or `.AppImage` (CLI: `-linux-x86_64-cli.tar.gz`) |
-| Android | `awake-helix-signer-<version>-android-universal.apk` |
+| Android | `anubisauto-signer-<version>-android-universal.apk` |
 
 Release files are built by GitHub Actions from the tagged commit
 ([`release.yml`](.github/workflows/release.yml)). iOS has only a test build:
@@ -73,14 +79,14 @@ shasum -a 256 -c SHA256SUMS --ignore-missing      # macOS
 
 ```powershell
 # Windows: the printed hash must equal the file's line in SHA256SUMS
-Get-FileHash .\awake-helix-signer-0.5.2-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\anubisauto-signer-0.7.0-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 Check that the file was built by this repository's release workflow
 ([GitHub artifact attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)):
 
 ```sh
-gh attestation verify awake-helix-signer-0.5.2-windows-x64-setup.exe --repo AnubisAutomation/awake-helix-signer
+gh attestation verify anubisauto-signer-0.7.0-windows-x64-setup.exe --repo AnubisAutomation/awake-helix-signer
 ```
 
 The Windows installer is not code-signed and the macOS app is ad-hoc signed
@@ -107,7 +113,7 @@ removes its caches when it ends (`--keep-cache` keeps them). Full guide:
 Just the CLI with a local Rust toolchain (pinned in `rust-toolchain.toml`):
 
 ```sh
-cargo build --release -p helix-signer-cli   # target/release/awake-helix-signer
+cargo build --release -p helix-signer-cli   # target/release/anubisauto-signer
 ```
 
 ## Tests

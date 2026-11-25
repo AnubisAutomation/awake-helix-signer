@@ -1,7 +1,7 @@
 {
   "name": "anubisauto-signer-app",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "Anubis Automation Script Signer: the Tauri 2 app (frontend).",
   "license": "Apache-2.0",

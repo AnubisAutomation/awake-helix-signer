@@ -46,7 +46,7 @@ shown. Runnable examples of every call are in `tests/flows.rs` and
 ## Version and constants
 
 ```rust
-pub const VERSION: &str;                         // "0.6.0"
+pub const VERSION: &str;                         // "0.7.0"
 pub const CHAIN_ID: u64;                         // 6714
 pub const DEFAULT_RPC: &str;                     // https://rpc.anubispace.org
 pub const DEFAULT_API: &str;                     // https://anubis.sivilization.com
@@ -409,7 +409,7 @@ pub mod icon { pub fn png(size: u32) -> Vec<u8>; pub fn ico(sizes: &[u32]) -> Ve
 
 ## Differences from the Python signer (deliberate)
 
-* The version is 0.6.0.
+* The version is 0.7.0.
 * `Local` in an expiry uses the system time zone with its DST rules for that
   date (Python used the current UTC offset for every date).
 * Inputs on which the Python signer crashed with a traceback (a plan
