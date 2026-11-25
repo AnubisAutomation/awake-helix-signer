@@ -1,7 +1,8 @@
 #!/bin/sh
 # Linux build (inside build/docker/linux.Dockerfile): the CLI, the .deb and
 # the AppImage, then smoke tests: the CLI runs, the .deb and the AppImage
-# contain the app, the CLI and the awakehelix:// handler, and the app's
+# contain the app, the CLI and the anubisauto:// (and legacy awakehelix://)
+# handler, and the app's
 # --selftest passes under Xvfb (the real webview loads the page, renders
 # every page in every language and opens sample links through the core).
 #   build/scripts/linux.sh [app|cli]
@@ -40,19 +41,21 @@ if [ "$what" = app ]; then
 
   say "smoke: .deb contents and metadata"
   dpkg-deb -f "$deb" Package Version Architecture Depends
-  dpkg-deb -c "$deb" | grep -Eq '(^|[ ./])usr/bin/awake-helix-signer$' || die ".deb lacks /usr/bin/awake-helix-signer (CLI)"
-  dpkg-deb -c "$deb" | grep -Eq '(^|[ ./])usr/bin/awake-helix-signer-app$' || die ".deb lacks the app binary"
+  dpkg-deb -c "$deb" | grep -Eq "(^|[ ./])usr/bin/$NAME\$" || die ".deb lacks /usr/bin/$NAME (CLI)"
+  dpkg-deb -c "$deb" | grep -Eq "(^|[ ./])usr/bin/$NAME-app\$" || die ".deb lacks the app binary"
   [ "$(dpkg-deb -f "$deb" Version)" = "$APP_VERSION" ] || die ".deb version is not $APP_VERSION"
   [ "$(dpkg-deb -f "$deb" Architecture)" = "$deb_arch" ] || die ".deb architecture is not $deb_arch"
   scratch=$(mktemp -d)
   dpkg-deb -x "$deb" "$scratch"
   desktop=$(ls "$scratch"/usr/share/applications/*.desktop | head -n 1)
-  grep -q 'x-scheme-handler/awakehelix' "$desktop" || die "the .desktop file does not handle awakehelix:// links"
+  for scheme in $SCHEMES; do
+    grep -q "x-scheme-handler/$scheme" "$desktop" || die "the .desktop file does not handle $scheme:// links"
+  done
   desktop-file-validate "$desktop" || true
-  "$scratch/usr/bin/awake-helix-signer" --version
+  "$scratch/usr/bin/$NAME" --version
 
   say "smoke: app --selftest under Xvfb (installed .deb layout)"
-  (cd "$scratch" && dbus-run-session -- xvfb-run -a -s "-screen 0 1280x900x24" ./usr/bin/awake-helix-signer-app --selftest)
+  (cd "$scratch" && dbus-run-session -- xvfb-run -a -s "-screen 0 1280x900x24" "./usr/bin/$NAME-app" --selftest)
   say "smoke: AppImage --selftest under Xvfb"
   (cd "$scratch" && APPIMAGE_EXTRACT_AND_RUN=1 dbus-run-session -- xvfb-run -a -s "-screen 0 1280x900x24" "$image" --selftest)
   rm -rf "$scratch"

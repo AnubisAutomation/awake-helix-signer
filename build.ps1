@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Build the Awake Helix Signer on a Windows host with Docker Desktop.
+  Build the Anubis Automation Script Signer on a Windows host with Docker Desktop.
 
 .DESCRIPTION
   The PowerShell twin of build.sh for Windows hosts: it builds the
@@ -15,7 +15,8 @@
   keystore defaults to $HOME\.awake-helix-signing\android-release.jks
   (generated on first use; back it up). Override with the environment
   variables HELIX_ANDROID_KEYSTORE, HELIX_ANDROID_KEYSTORE_PASSWORD_FILE and
-  HELIX_ANDROID_KEY_ALIAS, as for build.sh. The Android emulator smoke test
+  HELIX_ANDROID_KEY_ALIAS (default: the keystore's only key), as for
+  build.sh. The Android emulator smoke test
   needs /dev/kvm and does not run under Docker Desktop.
 
   Every build ends (also when it fails) by removing what it created: this
@@ -37,7 +38,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Rs = $PSScriptRoot
-$Prefix = 'awake-helix-signer'
+$Prefix = 'anubisauto-signer'
 $MinFreeGb = if ($env:HELIX_MIN_FREE_GB) { [int]$env:HELIX_MIN_FREE_GB } else { 10 }
 $Builder = $Prefix
 if ($env:HELIX_KEEP_CACHE -eq '1') { $KeepCache = $true }
@@ -168,7 +169,7 @@ function Run-In([string]$Kind, [string[]]$Extra, [string]$Script, [string[]]$Scr
 function Build-Android {
   $keystore = if ($env:HELIX_ANDROID_KEYSTORE) { $env:HELIX_ANDROID_KEYSTORE } else { Join-Path $HOME '.awake-helix-signing\android-release.jks' }
   $passwordFile = if ($env:HELIX_ANDROID_KEYSTORE_PASSWORD_FILE) { $env:HELIX_ANDROID_KEYSTORE_PASSWORD_FILE } else { [System.IO.Path]::ChangeExtension($keystore, '.password') }
-  $alias = if ($env:HELIX_ANDROID_KEY_ALIAS) { $env:HELIX_ANDROID_KEY_ALIAS } else { 'awake-helix-signer' }
+  $alias = if ($env:HELIX_ANDROID_KEY_ALIAS) { $env:HELIX_ANDROID_KEY_ALIAS } else { '' }
   $dir = Split-Path -Parent $keystore
   if ($dir.StartsWith($Rs, [System.StringComparison]::OrdinalIgnoreCase)) { Fail "the Android keystore must live outside the repository ($keystore)" }
   # Also outside a repository this one is checked out in (as a submodule).
@@ -205,7 +206,7 @@ function Build-Android {
   }
 }
 
-$lock = Join-Path ([System.IO.Path]::GetTempPath()) 'awake-helix-signer-build.lock'
+$lock = Join-Path ([System.IO.Path]::GetTempPath()) "$Prefix-build.lock"
 try { New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null } catch { Fail "another build holds $lock (remove it if no build runs)" }
 try {
   switch ($Platform) {

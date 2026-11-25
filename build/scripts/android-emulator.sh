@@ -2,8 +2,9 @@
 # Optional Android smoke test (needs /dev/kvm): install the emulator and one
 # x86_64 system image into a second SDK root on the volume mounted at
 # /opt/android-emu (kept between builds), boot a headless emulator, install
-# the APK, open awakehelix://grants with it and check that our activity
-# handled the link and the app process runs. Saves a screenshot next to the APK.
+# the APK, open anubisauto://grants and the legacy awakehelix://grants with it
+# and check that our activity handled each link and the app process runs.
+# Saves a screenshot next to the APK.
 #   build/scripts/android-emulator.sh <apk> <package>
 . "$(dirname "$0")/common.sh"
 
@@ -59,11 +60,13 @@ adb shell input keyevent 82 > /dev/null 2>&1 || true
 
 say "emulator: adb install"
 adb install -r "$apk"
-say "emulator: open awakehelix://grants"
-adb shell am start -W -a android.intent.action.VIEW -d "awakehelix://grants" | tee /tmp/am-start.txt
-grep -q "$package" /tmp/am-start.txt || die "awakehelix:// did not open $package"
+for scheme in $SCHEMES; do
+  say "emulator: open $scheme://grants"
+  adb shell am start -W -a android.intent.action.VIEW -d "$scheme://grants" | tee /tmp/am-start.txt
+  grep -q "$package" /tmp/am-start.txt || die "$scheme:// did not open $package"
+done
 sleep 15
 adb shell pidof "$package" > /dev/null || die "$package is not running after opening the link"
 adb exec-out screencap -p > "$(dirname "$apk")/emulator-grants.png" || true
 adb shell dumpsys activity activities | grep -m1 -E "mResumedActivity|topResumedActivity" || true
-say "emulator: the APK installs, handles awakehelix:// and runs"
+say "emulator: the APK installs, handles the links ($SCHEMES) and runs"

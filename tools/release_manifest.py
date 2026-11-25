@@ -2,14 +2,14 @@
 
 Usage::
 
-    python3 -I tools/release_manifest.py write DIR --version 0.5.2 [--commit SHA]
+    python3 -I tools/release_manifest.py write DIR --version 0.7.0 [--commit SHA]
     python3 -I tools/release_manifest.py verify DIR
 
 ``write`` lists every release file in DIR (the files ``build.sh
 <platform> --release`` writes to ``dist/<platform>/``, collected in
 one folder), derives os/arch/kind from the file name, and writes::
 
-    {"schema": 1, "name": "awake-helix-signer", "version": "0.5.2",
+    {"schema": 1, "name": "anubisauto-signer", "version": "0.7.0",
      "commit": "<sha>", "files": [{"name", "os", "arch", "kind", "size", "sha256"}, ...]}
 
 plus ``SHA256SUMS`` (``sha256sum -c`` format). The per-file ``<file>.sha256``
@@ -19,7 +19,7 @@ team-signed iOS IPA (``-ios.ipa``: it installs only on the team's registered
 devices) and any unknown name, so a stale or stray file never ships. The
 unsigned iOS IPA (``-ios-unsigned.ipa``, a test build that SideStore or
 AltStore re-sign with the user's Apple ID) is listed as ios/arm64/ipa. ``verify`` re-hashes every listed file and checks the sizes and
-SHA256SUMS; it exits 1 on any mismatch. The Awake Helix website's download page
+SHA256SUMS; it exits 1 on any mismatch. The Anubis Automation website's download page
 (``/downloads/signer``) reads this manifest at runtime; its publishing step
 runs ``write`` and ``verify``.
 Standard library only.
@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 SCHEMA = 1
-NAME = "awake-helix-signer"
+NAME = "anubisauto-signer"
 SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.+-][0-9A-Za-z.]+)?$")

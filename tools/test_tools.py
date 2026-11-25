@@ -45,7 +45,7 @@ def build_output(folder: Path, version: str = VERSION, suffixes: tuple[str, ...]
     """Release files as build.sh leaves them: each with <file>.sha256, plus SHA256SUMS."""
     lines = []
     for suffix in suffixes:
-        name = f"awake-helix-signer-{version}-{suffix}"
+        name = f"anubisauto-signer-{version}-{suffix}"
         (folder / name).write_bytes(name.encode())
         line = f"{hashlib.sha256(name.encode()).hexdigest()}  {name}\n"
         (folder / f"{name}.sha256").write_text(line)
@@ -62,7 +62,7 @@ class ReleaseManifestTests(unittest.TestCase):
             build_output(folder)
             (folder / "notes.txt").write_text("ignored")
             manifest = release_manifest.write(folder, VERSION, commit="a" * 40)
-            found = {item["name"].removeprefix(f"awake-helix-signer-{VERSION}-"): (item["os"], item["arch"], item["kind"])
+            found = {item["name"].removeprefix(f"anubisauto-signer-{VERSION}-"): (item["os"], item["arch"], item["kind"])
                      for item in manifest["files"]}
             self.assertEqual(found, RELEASE)
             first = manifest["files"][0]
@@ -86,17 +86,17 @@ class ReleaseManifestTests(unittest.TestCase):
             manifest = release_manifest.write(folder, VERSION)
             ios = [item for item in manifest["files"] if item["os"] == "ios"]
             self.assertEqual([(item["name"], item["arch"], item["kind"]) for item in ios],
-                             [(f"awake-helix-signer-{VERSION}-ios-unsigned.ipa", "arm64", "ipa")])
+                             [(f"anubisauto-signer-{VERSION}-ios-unsigned.ipa", "arm64", "ipa")])
             self.assertEqual(release_manifest.verify(folder), [])
 
     def test_refuses_other_versions_debug_builds_signed_ios_and_unknown_files(self) -> None:
         for extra in (
-            f"awake-helix-signer-1.2.2-linux-x86_64.deb",
-            f"awake-helix-signer-{VERSION}-debug-linux-x86_64.deb",
-            f"awake-helix-signer-{VERSION}-ios.ipa",
-            f"awake-helix-signer-{VERSION}-solaris-sparc.bin",
+            f"anubisauto-signer-1.2.2-linux-x86_64.deb",
+            f"anubisauto-signer-{VERSION}-debug-linux-x86_64.deb",
+            f"anubisauto-signer-{VERSION}-ios.ipa",
+            f"anubisauto-signer-{VERSION}-solaris-sparc.bin",
             f"awake_helix_signer-{VERSION}-py3-none-any.whl",
-            f"awake-helix-signer-{VERSION}-windows-x64.zip",
+            f"anubisauto-signer-{VERSION}-windows-x64.zip",
         ):
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as raw:
                 folder = Path(raw)
@@ -128,7 +128,7 @@ class ReleaseManifestTests(unittest.TestCase):
             subprocess.run([sys.executable, "-I", str(tool), "write", raw, "--version", VERSION], check=True, capture_output=True)
             checked = subprocess.run([sys.executable, "-I", str(tool), "verify", raw], capture_output=True, text=True, check=False)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-            (Path(raw) / f"awake-helix-signer-{VERSION}-android-universal.apk").write_bytes(b"other")
+            (Path(raw) / f"anubisauto-signer-{VERSION}-android-universal.apk").write_bytes(b"other")
             checked = subprocess.run([sys.executable, "-I", str(tool), "verify", raw], capture_output=True, text=True, check=False)
             self.assertEqual(checked.returncode, 1)
 

@@ -8,7 +8,7 @@ name: Release
 # the release notes say so):
 #   ANDROID_KEYSTORE_BASE64    base64 of the PKCS12 release keystore (.jks)
 #   ANDROID_KEYSTORE_PASSWORD  its store (= key) password
-#   ANDROID_KEY_ALIAS          key alias (default awake-helix-signer)
+#   ANDROID_KEY_ALIAS          key alias (default: the keystore's only key)
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build and publish, e.g. v0.5.2"
+        description: "Existing tag to (re)build and publish, e.g. v0.7.0"
         required: true
         type: string
 
@@ -154,7 +154,7 @@ jobs:
           {
             echo "HELIX_ANDROID_KEYSTORE=$dir/android-release.jks"
             echo "HELIX_ANDROID_KEYSTORE_PASSWORD_FILE=$dir/android-release.password"
-            echo "HELIX_ANDROID_KEY_ALIAS=${KEY_ALIAS:-awake-helix-signer}"
+            echo "HELIX_ANDROID_KEY_ALIAS=${KEY_ALIAS:-}"
           } >> "$GITHUB_ENV"
       - name: Build
         run: ./build.sh android --release --no-emulator
@@ -267,7 +267,7 @@ jobs:
           systems = {"linux": "Linux", "windows": "Windows", "macos": "macOS", "android": "Android"}
           labels = {"installer": "installer", "dmg": "app (.dmg)", "appimage": "AppImage",
                     "deb": ".deb package", "apk": "APK", "cli": "command line"}
-          print(f"# Awake Helix Signer {version}\n")
+          print(f"# Anubis Automation Script Signer {version}\n")
           print(f"Built from `{tag}` ({manifest['commit'][:12]}) by GitHub Actions; every file has a build provenance attestation.\n")
           if android != "true":
               print("> **Android is missing from this release**: the APK is published once the release signing key is configured.\n")
@@ -287,7 +287,7 @@ jobs:
           ```
 
           ```powershell
-          (Get-FileHash .\\awake-helix-signer-{version}-windows-x64-setup.exe -Algorithm SHA256).Hash   # Windows: compare with SHA256SUMS
+          (Get-FileHash .\\anubisauto-signer-{version}-windows-x64-setup.exe -Algorithm SHA256).Hash   # Windows: compare with SHA256SUMS
           ```
 
           Check that the file was built by this repository's release workflow (GitHub CLI):
@@ -308,8 +308,8 @@ jobs:
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$TAG" --title "Awake Helix Signer $VERSION" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --title "Anubis Automation Script Signer $VERSION" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" release/* --verify-tag --title "Awake Helix Signer $VERSION" \
+            gh release create "$TAG" release/* --verify-tag --title "Anubis Automation Script Signer $VERSION" \
               --notes-file notes.md --repo "$GITHUB_REPOSITORY"
           fi

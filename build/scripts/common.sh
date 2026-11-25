@@ -14,6 +14,15 @@ say() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'build: %s\n' "$*" >&2; exit 1; }
 
 RS=$(pwd)
+# shellcheck disable=SC2034 # used by the scripts that source this file
+{
+  # The command, the release file names and the app identifier (tauri.conf.json).
+  NAME=anubisauto-signer
+  IDENTIFIER=com.sivilization.anubisauto.signer
+  # Every link scheme the app registers: anubisauto, and awakehelix so the
+  # links of the signers before 0.7.0 still open it.
+  SCHEMES="anubisauto awakehelix"
+}
 APP_VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$RS/Cargo.toml" | head -n 1)
 HELIX_RELEASE=${HELIX_RELEASE:-0}
 CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$RS/target}
@@ -46,7 +55,7 @@ check_attestation() {
   lower=$(printf '%s' "$address" | tr 'A-F' 'a-f')
   [ "$lower" != "0x0000000000000000000000000000000000000000" ] || die "$file holds the zero address"
   if [ "$lower" = "$(printf '%s' "$placeholder" | tr 'A-F' 'a-f')" ]; then
-    die "$file still holds the build placeholder $placeholder: set it to the platform attestation address published by the Awake Helix website before building a release."
+    die "$file still holds the build placeholder $placeholder: set it to the platform attestation address published by the Anubis Automation website before building a release."
   fi
   say "attestation address $address (release value, not the placeholder)"
 }
@@ -76,8 +85,8 @@ cli_build() {
 # The CLI binary of a target, and the Tauri sidecar copy next to the app sources.
 cli_path() {
   case $1 in
-    *windows*) printf '%s/%s/%s/awake-helix-signer.exe' "$CARGO_TARGET_DIR" "$1" "$PROFILE" ;;
-    *) printf '%s/%s/%s/awake-helix-signer' "$CARGO_TARGET_DIR" "$1" "$PROFILE" ;;
+    *windows*) printf '%s/%s/%s/%s.exe' "$CARGO_TARGET_DIR" "$1" "$PROFILE" "$NAME" ;;
+    *) printf '%s/%s/%s/%s' "$CARGO_TARGET_DIR" "$1" "$PROFILE" "$NAME" ;;
   esac
 }
 
@@ -87,8 +96,8 @@ sidecar() {
   [ -f "$src" ] || die "CLI binary $src is missing"
   mkdir -p "$RS/app/src-tauri/binaries"
   case $target in
-    *windows*) cp "$src" "$RS/app/src-tauri/binaries/awake-helix-signer-$target.exe" ;;
-    *) cp "$src" "$RS/app/src-tauri/binaries/awake-helix-signer-$target" ;;
+    *windows*) cp "$src" "$RS/app/src-tauri/binaries/$NAME-$target.exe" ;;
+    *) cp "$src" "$RS/app/src-tauri/binaries/$NAME-$target" ;;
   esac
 }
 
@@ -98,12 +107,12 @@ out_dir() {
   printf '%s' "$dir"
 }
 
-# A release file name: awake-helix-signer-<version>-<suffix>, "-debug" for a debug build.
+# A release file name: anubisauto-signer-<version>-<suffix>, "-debug" for a debug build.
 release_name() {
   if [ "$HELIX_RELEASE" = 1 ]; then
-    printf 'awake-helix-signer-%s-%s' "$APP_VERSION" "$1"
+    printf '%s-%s-%s' "$NAME" "$APP_VERSION" "$1"
   else
-    printf 'awake-helix-signer-%s-debug-%s' "$APP_VERSION" "$1"
+    printf '%s-%s-debug-%s' "$NAME" "$APP_VERSION" "$1"
   fi
 }
 
@@ -134,12 +143,12 @@ tar_binary() {
   binary=$1
   archive=$2
   staging=$(mktemp -d)
-  cp "$binary" "$staging/awake-helix-signer"
-  chmod 0755 "$staging/awake-helix-signer"
+  cp "$binary" "$staging/$NAME"
+  chmod 0755 "$staging/$NAME"
   if tar --version 2> /dev/null | grep -q GNU; then
-    tar -C "$staging" --owner=0 --group=0 --numeric-owner -czf "$archive" awake-helix-signer
+    tar -C "$staging" --owner=0 --group=0 --numeric-owner -czf "$archive" "$NAME"
   else
-    tar -C "$staging" --uid 0 --gid 0 -czf "$archive" awake-helix-signer
+    tar -C "$staging" --uid 0 --gid 0 -czf "$archive" "$NAME"
   fi
   rm -rf "$staging"
 }

@@ -26,6 +26,16 @@ installed=$(rustup target list --installed)
 
 check_attestation
 
+# An Info.plist registers every link scheme and names our bundle identifier.
+check_plist() {
+  types=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes' "$1") || die "$1 declares no URL types"
+  for scheme in $SCHEMES; do
+    printf '%s\n' "$types" | grep -qx "[[:space:]]*$scheme" || die "Info.plist does not register $scheme://"
+  done
+  bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1")
+  [ "$bundle_id" = "$IDENTIFIER" ] || die "the bundle identifier is $bundle_id, not $IDENTIFIER"
+}
+
 if [ "$platform" = macos ]; then
   host=$(uname -m)
   case $host in arm64) host_triple=aarch64-apple-darwin; arch=arm64 ;; *) host_triple=x86_64-apple-darwin; arch=x86_64 ;; esac
@@ -43,12 +53,12 @@ if [ "$platform" = macos ]; then
   for target in $targets; do cli_build "$target"; done
   mkdir -p app/src-tauri/binaries
   if [ "$arch" = universal ]; then
-    lipo -create -output app/src-tauri/binaries/awake-helix-signer-universal-apple-darwin \
+    lipo -create -output "app/src-tauri/binaries/$NAME-universal-apple-darwin" \
       "$(cli_path aarch64-apple-darwin)" "$(cli_path x86_64-apple-darwin)"
     # Tauri also looks up per-architecture sidecars while compiling each slice.
     sidecar aarch64-apple-darwin
     sidecar x86_64-apple-darwin
-    cli=app/src-tauri/binaries/awake-helix-signer-universal-apple-darwin
+    cli=app/src-tauri/binaries/$NAME-universal-apple-darwin
   else
     sidecar "$host_triple"
     cli=$(cli_path "$host_triple")
@@ -67,15 +77,14 @@ if [ "$platform" = macos ]; then
   app_dir=$(ls -d "$bundle"/macos/*.app | head -n 1)
   dmg=$(ls "$bundle"/dmg/*.dmg | head -n 1)
   if [ ! -d "$app_dir" ] || [ ! -f "$dmg" ]; then die "tauri produced no .app or .dmg in $bundle"; fi
-  say "verify: ad-hoc signature, URL scheme, bundled CLI"
+  say "verify: ad-hoc signature, URL schemes, bundle identifier, bundled CLI"
   codesign --verify --deep --strict --verbose=2 "$app_dir"
   codesign -dv "$app_dir" 2>&1 | grep -E 'Signature=adhoc|Identifier=' || true
-  /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$app_dir/Contents/Info.plist" | grep -qx awakehelix ||
-    die "Info.plist does not register awakehelix://"
-  [ -x "$app_dir/Contents/MacOS/awake-helix-signer" ] || die "the .app does not contain the CLI"
-  "$app_dir/Contents/MacOS/awake-helix-signer" --version
+  check_plist "$app_dir/Contents/Info.plist"
+  [ -x "$app_dir/Contents/MacOS/$NAME" ] || die "the .app does not contain the CLI"
+  "$app_dir/Contents/MacOS/$NAME" --version
   say "smoke: app --selftest (opens a window for a few seconds)"
-  "$app_dir/Contents/MacOS/awake-helix-signer-app" --selftest
+  "$app_dir/Contents/MacOS/$NAME-app" --selftest
   cp "$dmg" "$out/$(release_name "macos-$arch.dmg")"
   checksums "$out"
   exit 0
@@ -103,8 +112,10 @@ fi
 out=$(out_dir ios)
 frontend
 cd app || exit 1
-# A failed earlier init can leave gen/apple without its Xcode project: start over.
-if ! ls -d src-tauri/gen/apple/*.xcodeproj > /dev/null 2>&1; then
+# A failed earlier init can leave gen/apple without its Xcode project, and one
+# generated before the identifier changed builds the wrong bundle: start over.
+if ! ls -d src-tauri/gen/apple/*.xcodeproj > /dev/null 2>&1 ||
+  ! grep -qsF "$IDENTIFIER" src-tauri/gen/apple/*.xcodeproj/project.pbxproj; then
   rm -rf src-tauri/gen/apple
   say "tauri ios init"
   npx tauri ios init --ci
@@ -131,13 +142,13 @@ if [ -z "$ipa" ] && [ "$signing" = unsigned ]; then
   (cd "$staging" && zip -qry app.ipa Payload)
 fi
 [ -n "$ipa" ] || die "no IPA produced (open app/src-tauri/gen/apple/*.xcodeproj in Xcode to see the signing error)"
-say "verify: IPA contents and URL scheme"
+say "verify: IPA contents, URL schemes and bundle identifier"
 listing=$(unzip -l "$ipa")
 printf '%s\n' "$listing" | grep -q 'Payload/.*\.app/Info.plist' || die "the IPA has no Payload/*.app/Info.plist"
 check=$(mktemp -d)
 unzip -q "$ipa" 'Payload/*.app/Info.plist' -d "$check"
 info=$(find "$check/Payload" -maxdepth 2 -name Info.plist | head -n 1)
-/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$info" | grep -qx awakehelix || die "Info.plist does not register awakehelix://"
+check_plist "$info"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info"
 /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$info"

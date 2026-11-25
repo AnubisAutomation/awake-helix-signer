@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the Awake Helix Signer (Tauri app + CLI) for one platform. Linux,
+# Build the Anubis Automation Script Signer (Tauri app + CLI) for one platform. Linux,
 # Windows and Android build in a container (Docker); macOS and iOS build
 # natively on a Mac with Xcode (Apple's toolchains do not run in containers).
 #
@@ -37,7 +37,8 @@
 #   HELIX_ANDROID_KEYSTORE                release keystore (default ~/.awake-helix-signing/android-release.jks,
 #                                         generated on first use; BACK IT UP)
 #   HELIX_ANDROID_KEYSTORE_PASSWORD_FILE  its password file (default: next to it, .password, mode 0600)
-#   HELIX_ANDROID_KEY_ALIAS               key alias (default awake-helix-signer)
+#   HELIX_ANDROID_KEY_ALIAS               key alias (default: the keystore's only key; anubisauto-signer
+#                                         for a new keystore)
 #   HELIX_MIN_FREE_GB                     refuse to start below this much free disk (default 10)
 #   HELIX_WAIT_MAX                        seconds to wait for a busy machine (default 1800)
 #   HELIX_TEST_PARTS                      test: a subset of "frontend rust e2e"
@@ -50,11 +51,11 @@ RS=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 RUST_TOOLCHAIN=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "$RS/rust-toolchain.toml")
 MIN_FREE_GB=${HELIX_MIN_FREE_GB:-10}
 WAIT_MAX=${HELIX_WAIT_MAX:-1800}
-PREFIX=awake-helix-signer
+PREFIX=anubisauto-signer
 
 say() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'build.sh: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 1 ] || usage
 platform=$1
@@ -108,7 +109,7 @@ estimate() {
 }
 
 # One heavy build at a time; also wait while the machine is loaded.
-LOCK=${TMPDIR:-/tmp}/awake-helix-signer-build.lock
+LOCK=${TMPDIR:-/tmp}/$PREFIX-build.lock
 have_lock=0
 do_cleanup=0
 take_lock() {
@@ -322,7 +323,7 @@ container_windows() {
 container_android() {
   keystore=${HELIX_ANDROID_KEYSTORE:-$HOME/.awake-helix-signing/android-release.jks}
   password_file=${HELIX_ANDROID_KEYSTORE_PASSWORD_FILE:-${keystore%.*}.password}
-  alias=${HELIX_ANDROID_KEY_ALIAS:-awake-helix-signer}
+  alias=${HELIX_ANDROID_KEY_ALIAS:-}
   signing_dir=$(dirname "$keystore")
   case $signing_dir in "$RS"|"$RS"/*) die "the Android keystore must live outside the repository ($keystore)" ;; esac
   # Also outside a repository this one is checked out in (as a submodule).

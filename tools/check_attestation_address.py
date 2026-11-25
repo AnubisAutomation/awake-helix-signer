@@ -6,7 +6,7 @@ Usage::
 
 Always checks that the file holds one checksummed, non-zero address. With
 ``--release`` the build placeholder is refused. ``--expect`` compares it with
-the platform attestation address the Awake Helix website publishes. Exits 0
+the platform attestation address the Anubis Automation website publishes. Exits 0
 when every check passes, 1 otherwise.
 ``build.sh`` (``check_attestation`` in ``build/scripts/common.sh``)
 and the core's ``build.rs`` apply the same rules to every build; this tool
@@ -53,7 +53,7 @@ def check(text: str, *, release: bool, expect: str | None) -> list[str]:
     if release and address == placeholder():
         problems.append(
             f"{FILE.name} still holds the placeholder: set it to the platform attestation "
-            "address the Awake Helix website publishes before a release."
+            "address the Anubis Automation website publishes before a release."
         )
     if expect is not None and address != expect:
         problems.append(f"{FILE.name} holds {address}, expected {expect}.")
