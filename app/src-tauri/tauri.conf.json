@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Awake Helix Signer",
+  "productName": "Anubis Automation Script Signer",
   "version": "0.6.0",
-  "identifier": "com.sivilization.awakehelix.signer",
+  "identifier": "com.sivilization.anubisauto.signer",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Awake Helix Signer",
+        "title": "Anubis Automation Script Signer",
         "width": 940,
         "height": 800,
         "minWidth": 360,
@@ -33,8 +33,8 @@
     "publisher": "Sivilization",
     "copyright": "Sivilization",
     "category": "Finance",
-    "shortDescription": "Authorize and revoke Awake Helix hosted bots with your own key.",
-    "longDescription": "Awake Helix Signer verifies the website's plan against constants built into the app, shows a summary decoded from the calldata, and signs EIP-7702 grants and revocations with a key that never leaves this device.",
+    "shortDescription": "Authorize and revoke Anubis Automation hosted bots with your own key.",
+    "longDescription": "Anubis Automation Script Signer verifies the website's plan against constants built into the app, shows a summary decoded from the calldata, and signs EIP-7702 grants and revocations with a key that never leaves this device.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -69,8 +69,8 @@
   },
   "plugins": {
     "deep-link": {
-      "desktop": { "schemes": ["awakehelix"] },
-      "mobile": [{ "scheme": ["awakehelix"], "appLink": false }]
+      "desktop": { "schemes": ["anubisauto", "awakehelix"] },
+      "mobile": [{ "scheme": ["anubisauto", "awakehelix"], "appLink": false }]
     }
   }
 }

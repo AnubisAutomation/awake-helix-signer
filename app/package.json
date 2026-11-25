@@ -1,9 +1,9 @@
 {
-  "name": "awake-helix-signer-app",
+  "name": "anubisauto-signer-app",
   "private": true,
   "version": "0.6.0",
   "type": "module",
-  "description": "Awake Helix Signer: the Tauri 2 app (frontend).",
+  "description": "Anubis Automation Script Signer: the Tauri 2 app (frontend).",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",

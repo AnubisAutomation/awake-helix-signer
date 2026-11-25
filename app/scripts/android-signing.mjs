@@ -4,13 +4,14 @@
 // Gradle build reads their paths from the environment:
 //   HELIX_ANDROID_KEYSTORE                path of the .jks / PKCS12 keystore
 //   HELIX_ANDROID_KEYSTORE_PASSWORD_FILE  file holding the store (= key) password
-//   HELIX_ANDROID_KEY_ALIAS               key alias
+//   HELIX_ANDROID_KEY_ALIAS               key alias (build/scripts/android.sh reads it
+//                                         from the keystore when it is not given)
 // Idempotent: running it again leaves a patched file unchanged.
 // Usage: node scripts/android-signing.mjs <gen/android dir>
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const MARK = "// awake-helix: release signing";
+const MARK = "// anubisauto: release signing";
 const dir = process.argv[2] ?? "src-tauri/gen/android";
 const file = join(dir, "app", "build.gradle.kts");
 let text = readFileSync(file, "utf8");
@@ -30,7 +31,7 @@ if (!text.includes(MARK)) {
     "            storeFile = File(store)",
     "            storePassword = secret",
     "            keyPassword = secret",
-    '            keyAlias = System.getenv("HELIX_ANDROID_KEY_ALIAS") ?: "awake-helix-signer"',
+    '            keyAlias = System.getenv("HELIX_ANDROID_KEY_ALIAS") ?: "anubisauto-signer"',
     '            storeType = "PKCS12"',
     "        }",
     "    }",

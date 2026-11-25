@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "externalBin": ["binaries/awake-helix-signer"]
+    "externalBin": ["binaries/anubisauto-signer"]
   }
 }

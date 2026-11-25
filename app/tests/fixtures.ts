@@ -158,8 +158,8 @@ export class FakeBackend implements Transport {
     initial_link: () => null,
     open_link: ({ url }) => {
       const value = String(url);
-      if (value.includes("api=https://evil")) throw refused(m("link.foreignSite", "This link points to https://evil.example, which is not the official Awake Helix website (https://anubis.sivilization.com). It was refused. If you really run your own instance, pass --allow-api https://evil.example.", { site: "https://evil.example", official: API }));
-      const action = /^awakehelix:\/\/(\w+)/.exec(value)![1];
+      if (value.includes("api=https://evil")) throw refused(m("link.foreignSite", "This link points to https://evil.example, which is not the official Anubis Automation website (https://anubis.sivilization.com). It was refused. If you really run your own instance, pass --allow-api https://evil.example.", { site: "https://evil.example", official: API }));
+      const action = /^(?:anubisauto|awakehelix):\/\/(\w+)/i.exec(value)![1];
       return { action, api: API, official: true };
     },
     close_request: () => null,
@@ -213,7 +213,7 @@ export class FakeBackend implements Transport {
       this.pending = [];
       return null;
     },
-    setup_status: () => ({ os: "linux", mobile: false, handler: "awake-helix-signer-app.desktop", command: null, canRegister: true, canInstallCli: true, cliPlaces: ["/home/u/.local/bin"], firstRun: false }),
+    setup_status: () => ({ os: "linux", mobile: false, handler: "anubisauto-signer-app-handler.desktop", command: null, canRegister: true, canInstallCli: true, cliPlaces: ["/home/u/.local/bin"], firstRun: false }),
     ping: () => ({ version: "0.5.2", os: "linux", arch: "x86_64", api: API }),
     set_title: ({ title }) => {
       this.title = String(title);

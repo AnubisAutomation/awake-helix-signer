@@ -1,4 +1,4 @@
-//! Awake Helix Signer, the Tauri 2 app: the window's commands on top of
+//! Anubis Automation Script Signer, the Tauri 2 app: the window's commands on top of
 //! helix-signer-core. `controller` holds all state and logic (unit-tested
 //! with a mock core); `commands` is the thin Tauri glue; `desktop` is the
 //! link/CLI integration of the desktop systems.
@@ -73,7 +73,7 @@ fn deliver(app: &tauri::AppHandle, url: String) {
 pub fn main_desktop() {
     let options = Options::from_args(std::env::args().skip(1));
     if options.version {
-        println!("awake-helix-signer-app {}", helix_signer_core::VERSION);
+        println!("anubisauto-signer-app {}", helix_signer_core::VERSION);
         return;
     }
     run_with(options);
@@ -132,7 +132,7 @@ fn run_with(options: Options) {
             });
             #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title(&format!("Awake Helix Signer {}", helix_signer_core::VERSION));
+                let _ = window.set_title(&format!("{} {}", crate::desktop::PRODUCT, helix_signer_core::VERSION));
             }
             // Wipe an unlocked key after 10 minutes without use.
             let idle = Arc::clone(&controller);
@@ -176,7 +176,7 @@ fn run_with(options: Options) {
             commands::quit,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building the Awake Helix Signer app")
+        .expect("error while building the Anubis Automation Script Signer app")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 // Wipe the key and end the website session on the way out.

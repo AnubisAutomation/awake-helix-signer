@@ -17,9 +17,9 @@ export interface Leak {
 /** Words that are names, not English (brands, tokens, words to type, standards). */
 const ALLOWED = new Set([
   // Brands and the words the user types.
-  "awake", "helix", "anubis", "chain", "authorize", "revoke",
+  "anubis", "automation", "awake", "helix", "chain", "authorize", "revoke",
   // Standards, tokens, protocols and system names that are data.
-  "dai", "lgns", "ailgns", "helix7702", "helix7702account", "utc", "json", "https", "http", "awakehelix",
+  "dai", "lgns", "ailgns", "helix7702", "helix7702account", "utc", "json", "https", "http", "anubisauto",
   "linux", "windows", "macos", "android",
 ]);
 
@@ -45,7 +45,7 @@ function templates(language: Language): RegExp[] {
 
 const DATA = [
   /https?:\/\/[^\s)]+/g, // URLs
-  /awakehelix:\/\/\S*/g,
+  /anubisauto:\/\/\S*/g,
   /0x[0-9a-fA-F…]+/g, // addresses, hashes, short IDs
   /[\w.-]+\.(json|desktop|app|exe|AppImage)\b/g, // file names
   /(~|\/)[\w./~-]+/g, // paths

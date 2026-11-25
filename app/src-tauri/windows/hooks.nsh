@@ -1,5 +1,5 @@
-; Awake Helix Signer installer hooks (Tauri NSIS, current-user install).
-; Put the install folder on the user's PATH so `awake-helix-signer` (the
+; Anubis Automation Script Signer installer hooks (Tauri NSIS, current-user install).
+; Put the install folder on the user's PATH so `anubisauto-signer` (the
 ; command-line tool installed next to the app) works in a new terminal, and
 ; take it off again on uninstall. PowerShell edits the value so a long PATH is
 ; never truncated by NSIS's string limit; nothing else in PATH is touched.

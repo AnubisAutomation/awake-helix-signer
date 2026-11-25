@@ -1,12 +1,12 @@
 [package]
 name = "helix-signer-app"
-description = "Awake Helix Signer: the Tauri 2 app (Windows, macOS, Linux, Android, iOS)."
+description = "Anubis Automation Script Signer: the Tauri 2 app (Windows, macOS, Linux, Android, iOS)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-default-run = "awake-helix-signer-app"
+default-run = "anubisauto-signer-app"
 
 [lib]
 # staticlib/cdylib for the Android and iOS builds, rlib for the desktop binary and tests.
@@ -14,7 +14,7 @@ name = "helix_signer_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "awake-helix-signer-app"
+name = "anubisauto-signer-app"
 path = "src/main.rs"
 
 [features]

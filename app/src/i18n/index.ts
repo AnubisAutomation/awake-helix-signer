@@ -27,7 +27,7 @@ export const DICTIONARIES: Record<Language, Dictionary> = {
   ko,
   es,
 };
-const STORAGE = "awake-helix-signer.language";
+const STORAGE = "anubisauto-signer.language";
 
 /** The supported language closest to a BCP 47 tag, or null. */
 export function match(tag: string): Language | null {

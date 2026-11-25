@@ -130,7 +130,7 @@ fn open_link_verify_edit_authorize() {
     let token = fake.config["signToken"].as_str().unwrap();
 
     // A loopback website is accepted only with development constants.
-    let link = controller.open_link(&format!("awakehelix://sign?plan={token}&api={}", fake.api())).unwrap();
+    let link = controller.open_link(&format!("anubisauto://sign?plan={token}&api={}", fake.api())).unwrap();
     assert_eq!(link.action, "sign");
     assert!(!link.official);
     let key = controller.load_key(fake.key()).unwrap();
@@ -194,7 +194,7 @@ fn open_link_verify_edit_authorize() {
 fn grants_list_revoke_one_then_all() {
     let fake = fake_or_skip!();
     let controller = fake.controller();
-    controller.open_link(&format!("awakehelix://grants?api={}", fake.api())).unwrap();
+    controller.open_link(&format!("anubisauto://grants?api={}", fake.api())).unwrap();
     controller.load_key(fake.key()).unwrap();
     let listing = controller.grants_load().unwrap();
     assert_eq!(listing.owner, fake.config["owner"].as_str().unwrap().to_lowercase());
@@ -249,10 +249,18 @@ fn export_keystore_round_trips() {
 fn foreign_website_is_refused_in_production() {
     let core = RealCore::production();
     let controller = Controller::new(core, Arc::new(NoEvents));
-    let error = controller.open_link(&format!("awakehelix://sign?plan={}&api=https://evil.example", "A".repeat(32))).unwrap_err();
-    assert!(error.message.contains("not the official Awake Helix website"), "{}", error.message);
-    let error = controller.open_link(&format!("awakehelix://sign?plan={}&api=http://127.0.0.1:9", "A".repeat(32))).unwrap_err();
-    assert_eq!(error.kind, "refused");
-    let ok = controller.open_link(&format!("awakehelix://sign?plan={}", "A".repeat(32))).unwrap();
-    assert!(ok.official);
+    for scheme in ["anubisauto", "awakehelix"] {
+        let error = controller.open_link(&format!("{scheme}://sign?plan={}&api=https://evil.example", "A".repeat(32))).unwrap_err();
+        assert!(error.message.contains("not the official Anubis Automation website"), "{}", error.message);
+        let error = controller.open_link(&format!("{scheme}://sign?plan={}&api=http://127.0.0.1:9", "A".repeat(32))).unwrap_err();
+        assert_eq!(error.kind, "refused");
+        // The legacy scheme of the signers before 0.7.0 opens the same request.
+        let ok = controller.open_link(&format!("{scheme}://sign?plan={}", "A".repeat(32))).unwrap();
+        assert!(ok.official);
+        assert_eq!(ok.action, "sign");
+    }
+    for other in ["anubisautox", "awake-helix", "anubis"] {
+        let error = controller.open_link(&format!("{other}://sign?plan={}", "A".repeat(32))).unwrap_err();
+        assert!(error.message.contains("Not an anubisauto:// link."), "{other}: {}", error.message);
+    }
 }

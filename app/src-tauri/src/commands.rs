@@ -126,7 +126,12 @@ pub fn setup_status(app: AppHandle) -> SetupView {
     #[cfg(desktop)]
     let registered = {
         use tauri_plugin_deep_link::DeepLinkExt;
-        app.deep_link().is_registered(desktop::SCHEME).ok()
+        // Registered only when both the new and the legacy scheme open this app.
+        desktop::SCHEMES
+            .iter()
+            .map(|scheme| app.deep_link().is_registered(scheme).ok())
+            .collect::<Option<Vec<bool>>>()
+            .map(|registered| registered.iter().all(|yes| *yes))
     };
     #[cfg(mobile)]
     let registered = {
@@ -139,17 +144,19 @@ pub fn setup_status(app: AppHandle) -> SetupView {
 #[tauri::command]
 pub fn register_links(app: AppHandle) -> CommandResult<Message> {
     if desktop::mobile() || cfg!(target_os = "macos") {
-        return Err(CommandError::refused(msg!("app.linksAtInstall", "The system registers awakehelix:// links for this app at install.")));
+        return Err(CommandError::refused(msg!("app.linksAtInstall", "The system registers anubisauto:// links for this app at install.")));
     }
     #[cfg(desktop)]
     {
         use tauri_plugin_deep_link::DeepLinkExt;
-        app.deep_link()
-            .register(desktop::SCHEME)
-            .map_err(|error| CommandError::error(msg!("app.registerFailed", "Registration failed: {detail}", detail = error.to_string())))?;
+        for scheme in desktop::SCHEMES {
+            app.deep_link()
+                .register(scheme)
+                .map_err(|error| CommandError::error(msg!("app.registerFailed", "Registration failed: {detail}", detail = error.to_string())))?;
+        }
     }
     let _ = &app;
-    Ok(msg!("app.linksRegistered", "awakehelix:// links now open this app."))
+    Ok(msg!("app.linksRegistered", "anubisauto:// links now open this app."))
 }
 
 #[tauri::command]

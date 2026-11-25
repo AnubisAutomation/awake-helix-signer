@@ -1,4 +1,5 @@
-//! "This computer": where awakehelix:// links and the terminal command point,
+//! "This computer": where anubisauto:// links (and the legacy awakehelix://
+//! ones) and the terminal command point,
 //! registering them, and the AppImage first-run question. Phones have none of
 //! this (the OS registers the link scheme at install; there is no CLI).
 
@@ -8,9 +9,14 @@ use helix_signer_core::{msg, Message};
 
 use crate::views::{CommandError, CommandResult, SetupView};
 
-pub const COMMAND: &str = "awake-helix-signer";
-pub const SCHEME: &str = "awakehelix";
+pub const COMMAND: &str = helix_signer_core::integrate::COMMAND;
+/// The scheme the app shows; [`SCHEMES`] are all it registers and opens.
+pub const SCHEME: &str = helix_signer_core::links::SCHEME;
+/// `anubisauto` and the legacy `awakehelix` of the signers before 0.7.0.
+pub const SCHEMES: [&str; 2] = helix_signer_core::links::SCHEMES;
 const STATE_FILE: &str = "integration.json";
+/// The product name (tauri.conf.json `productName`).
+pub const PRODUCT: &str = "Anubis Automation Script Signer";
 
 pub fn os_name() -> &'static str {
     if cfg!(target_os = "android") {
@@ -70,7 +76,7 @@ pub fn bundled_cli() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Where `awake-helix-signer` runs from today, if anywhere we know.
+/// Where `anubisauto-signer` runs from today, if anywhere we know.
 pub fn installed_cli(home: &Path) -> Option<PathBuf> {
     if cfg!(windows) || mobile() {
         return None;
@@ -110,7 +116,7 @@ pub fn mark_first_run() -> CommandResult<()> {
     std::fs::write(&path, serde_json::to_string_pretty(&state).unwrap_or_default() + "\n").map_err(|error| CommandError::io(error.to_string()))
 }
 
-/// Linux: the .desktop file that opens awakehelix:// links (xdg-mime).
+/// Linux: the .desktop file that opens anubisauto:// links (xdg-mime).
 fn linux_handler() -> Option<String> {
     let output = std::process::Command::new("xdg-mime").args(["query", "default", &format!("x-scheme-handler/{SCHEME}")]).output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -131,7 +137,7 @@ pub fn setup(handler_registered: Option<bool>) -> SetupView {
         return SetupView {
             os,
             mobile: true,
-            handler: Some("Awake Helix Signer".into()),
+            handler: Some(PRODUCT.into()),
             command: None,
             can_register: false,
             can_install_cli: false,
@@ -144,7 +150,7 @@ pub fn setup(handler_registered: Option<bool>) -> SetupView {
         "macos" => macos_handler(),
         "linux" => linux_handler(),
         _ => handler_registered.filter(|registered| *registered).map(|_| {
-            std::env::current_exe().map(|exe| exe.to_string_lossy().into_owned()).unwrap_or_else(|_| "Awake Helix Signer".into())
+            std::env::current_exe().map(|exe| exe.to_string_lossy().into_owned()).unwrap_or_else(|_| PRODUCT.into())
         }),
     };
     SetupView {
@@ -163,7 +169,7 @@ fn writable(dir: &Path) -> bool {
     if std::fs::create_dir_all(dir).is_err() {
         return false;
     }
-    let probe = dir.join(".awake-helix-write-test");
+    let probe = dir.join(format!(".{COMMAND}-write-test"));
     let ok = std::fs::write(&probe, b"").is_ok();
     let _ = std::fs::remove_file(&probe);
     ok

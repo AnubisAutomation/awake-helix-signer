@@ -1,4 +1,4 @@
-// Packaging self-test (`awake-helix-signer-app --selftest`): the built app
+// Packaging self-test (`anubisauto-signer-app --selftest`): the built app
 // loads its page in the real webview, renders every page in every language
 // and opens sample links through the real backend and core link parser.
 // Nothing is signed and nothing is sent anywhere.
@@ -34,14 +34,17 @@ export async function selftest(shell: Shell): Promise<{ ok: boolean; detail: str
   }
   setLanguage(original);
   const token = "S".repeat(32);
-  await handleUrl(`awakehelix://sign?plan=${token}`);
+  await handleUrl(`anubisauto://sign?plan=${token}`);
   check(store.request.phase === "ready", `sign link: ${store.request.phase}`);
   check(store.link?.official === true, "sign link: official website");
-  await handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+  await handleUrl(`anubisauto://revoke?plan=${"R".repeat(32)}`);
   check(store.request.phase === "ready" && store.link?.action === "revoke", "revoke link");
-  await handleUrl("awakehelix://grants");
+  await handleUrl("anubisauto://grants");
   check(store.tab === "grants" && store.link?.action === "grants", "grants link");
-  await handleUrl("awakehelix://sign?plan=x&api=https://evil.example");
+  // Links of the signers before 0.7.0 still open the app.
+  await handleUrl(`awakehelix://revoke?plan=${"L".repeat(32)}`);
+  check(store.request.phase === "ready" && store.link?.action === "revoke", "legacy revoke link");
+  await handleUrl("anubisauto://sign?plan=x&api=https://evil.example");
   check(store.request.phase === "empty" && store.status?.key === "link.refused", "foreign website refused");
   await closeRequest();
   const setup = await api.setupStatus();

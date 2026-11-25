@@ -4,12 +4,13 @@
 // and chain of the signer test fakes (tests/py, served by
 // e2e/fake_server.py).
 //
-//   1. The app starts with an awakehelix://sign link (as the OS would start
+//   1. The app starts with an anubisauto://sign link (as the OS would start
 //      it): load a private key, verify the summary, edit calls/caps/expiry,
 //      apply (the website re-plans, the app re-verifies), type AUTHORIZE, sign.
-//   2. A second instance is started with awakehelix://grants (a link clicked
-//      while the app runs): single-instance hands it to the running window,
-//      which opens My grants; sign in, list, revoke one, revoke all.
+//   2. A second instance is started with a legacy awakehelix://grants link (an
+//      old link clicked while the app runs): single-instance hands it to the
+//      running window, which opens My grants; sign in, list, revoke one,
+//      revoke all.
 //   The fake server's state is checked after each part (transactions,
 //   reports, customize requests, revoke confirmations). Screenshots go to
 //   $E2E_OUT (default ./test-results).
@@ -74,7 +75,7 @@ for (let i = 0; i < 50; i++) {
     await sleep(200);
   }
 }
-const signLink = `awakehelix://sign?plan=${fake.signToken}&api=${encodeURIComponent(fake.api)}`;
+const signLink = `anubisauto://sign?plan=${fake.signToken}&api=${encodeURIComponent(fake.api)}`;
 const session = await wd("POST", "/session", {
   capabilities: { alwaysMatch: { "tauri:options": { application: app, args: [signLink] } } },
 });
@@ -144,7 +145,7 @@ function assert(condition, message) {
 
 try {
   // ------------------------------------------------------------ 1. authorize
-  console.log("1. awakehelix://sign link -> key -> summary -> edit -> authorize");
+  console.log("1. anubisauto://sign link -> key -> summary -> edit -> authorize");
   await waitFor("the request page", async () => (await text("request-heading")) === "Authorize a hosted bot");
   assert((await text("site-line")).includes(fake.api), "the window names the link's website");
   assert((await text("site-line")).includes("NOT the official site"), "and warns it is not the official one");
@@ -215,7 +216,7 @@ try {
   assert((await script("return document.querySelector('[data-testid=key-panel] .key-form').hidden")) === false, "the key was wiped after signing");
 
   // ------------------------------------------------------------ 2. my grants
-  console.log("2. second instance with awakehelix://grants -> sign in -> revoke one -> revoke all");
+  console.log("2. second instance with a legacy awakehelix://grants link -> sign in -> revoke one -> revoke all");
   const second = spawn(app, [`awakehelix://grants?api=${encodeURIComponent(fake.api)}`], { env, stdio: "ignore" });
   const code = await new Promise((done) => second.on("exit", done));
   assert(code === 0, "the second instance handed the link over and exited");

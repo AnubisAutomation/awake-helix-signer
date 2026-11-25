@@ -31,7 +31,7 @@ beforeEach(async () => {
 
 describe("Request: link -> key -> summary -> edit -> authorize", () => {
   it("runs the whole authorization", async () => {
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     expect($("request-heading").textContent).toBe("Authorize a hosted bot");
     expect($("request-load").hidden).toBe(false);
 
@@ -70,7 +70,7 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
   });
 
   it("names each rule with its contract and keeps a counted rule at one per call", async () => {
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x" + "11".repeat(32));
     await click("request-load");
@@ -99,7 +99,7 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
   });
 
   it("keeps the plan when the website refuses an edit", async () => {
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x" + "11".repeat(32));
     await click("request-load");
@@ -119,7 +119,7 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
   });
 
   it("refuses a wrong confirmation word and a bad key", async () => {
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x1234");
     await click("request-load");
@@ -147,36 +147,48 @@ describe("Request: link -> key -> summary -> edit -> authorize", () => {
   });
 
   it("refuses foreign websites, unknown links and asks before discarding a verified plan", async () => {
-    await handleUrl("awakehelix://sign?plan=xxxxxxxxxxxxxxxxxxxxxxxx&api=https://evil.example");
-    expect($("status").textContent).toBe("Refused link: This link points to https://evil.example, which is not the official Awake Helix website (https://anubis.sivilization.com). It was refused.");
+    await handleUrl("anubisauto://sign?plan=xxxxxxxxxxxxxxxxxxxxxxxx&api=https://evil.example");
+    expect($("status").textContent).toBe("Refused link: This link points to https://evil.example, which is not the official Anubis Automation website (https://anubis.sivilization.com). It was refused.");
     await handleUrl("https://anubis.sivilization.com");
-    expect($("status").textContent).toBe("Only awakehelix:// links are accepted.");
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    expect($("status").textContent).toBe("Only anubisauto:// links are accepted.");
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x" + "11".repeat(32));
     await click("request-load");
-    const opening = handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    const opening = handleUrl(`anubisauto://revoke?plan=${"R".repeat(32)}`);
     await settle();
     await click("confirm-no");
     await opening;
     expect(store.request.phase).toBe("verified");
-    const again = handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    const again = handleUrl(`anubisauto://revoke?plan=${"R".repeat(32)}`);
     await settle();
     await click("confirm-yes");
     await again;
     expect($("request-heading").textContent).toBe("Revoke a hosted-bot grant");
   });
 
+  it("still opens the awakehelix:// links of the signers before 0.7.0, and refuses look-alikes", async () => {
+    await handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    expect(backend.calls.filter(([command]) => command === "open_link").at(-1)![1]).toEqual({ url: `awakehelix://revoke?plan=${"R".repeat(32)}` });
+    expect($("request-heading").textContent).toBe("Revoke a hosted-bot grant");
+    const opened = backend.calls.filter(([command]) => command === "open_link").length;
+    for (const url of [`anubisautox://sign?plan=${"A".repeat(32)}`, `awake-helix://sign?plan=${"A".repeat(32)}`]) {
+      await handleUrl(url);
+      expect($("status").textContent).toBe("Only anubisauto:// links are accepted.");
+    }
+    expect(backend.calls.filter(([command]) => command === "open_link").length).toBe(opened);
+  });
+
   it("opens a pasted plan token as a sign link", async () => {
     type("paste-input", "T".repeat(30));
     await click("paste-open");
-    expect(backend.calls.find(([command]) => command === "open_link")![1]).toEqual({ url: `awakehelix://sign?plan=${"T".repeat(30)}` });
+    expect(backend.calls.find(([command]) => command === "open_link")![1]).toEqual({ url: `anubisauto://sign?plan=${"T".repeat(30)}` });
   });
 });
 
 describe("My grants", () => {
   it("signs in, lists, revokes one after REVOKE, then revokes all", async () => {
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     expect(store.tab).toBe("grants");
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x" + "11".repeat(32));
@@ -225,7 +237,7 @@ describe("My grants", () => {
       { ...base, grantId: "0xd5", status: "frozen_by_dao", revocable: false, active: false },
     ];
     backend.answers.grants_load = () => ({ ...listing(), rows });
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x" + "11".repeat(32));
     await click("grants-load");
@@ -268,7 +280,7 @@ describe("My grants", () => {
         reads += 1;
         return { ...listing(), refreshing: reads < fresh };
       };
-      await handleUrl("awakehelix://grants");
+      await handleUrl("anubisauto://grants");
       $<HTMLInputElement>("key-source-privateKey").click();
       type("key-private", "0x" + "11".repeat(32));
       $("grants-load").click();
@@ -331,7 +343,7 @@ describe("My grants", () => {
 
 describe("install check", () => {
   it("answers a ping link in an overlay", async () => {
-    await handleUrl(`awakehelix://ping?token=${"P".repeat(32)}`);
+    await handleUrl(`anubisauto://ping?token=${"P".repeat(32)}`);
     expect($("ping-text").textContent).toContain("installed and linked");
     await click("ping-close");
     expect($("ping").hidden).toBe(true);

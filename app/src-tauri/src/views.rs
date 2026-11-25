@@ -62,7 +62,7 @@ pub struct AppInfo {
     pub launched_for_ping: bool,
 }
 
-/// A validated awakehelix:// link (the token stays in the backend).
+/// A validated anubisauto:// (or legacy awakehelix://) link (the token stays in the backend).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkView {

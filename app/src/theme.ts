@@ -1,6 +1,6 @@
 // Light/dark: follow the system unless the user picked one (remembered on this device).
 export type Theme = "auto" | "light" | "dark";
-const STORAGE = "awake-helix-signer.theme";
+const STORAGE = "anubisauto-signer.theme";
 
 export function storedTheme(): Theme {
   try {

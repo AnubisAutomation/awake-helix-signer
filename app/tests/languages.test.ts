@@ -50,7 +50,7 @@ async function unlockPrivateKey(): Promise<void> {
 }
 
 async function verifiedRequest(): Promise<void> {
-  await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+  await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
   await unlockPrivateKey();
   await click("request-load");
 }
@@ -85,7 +85,7 @@ describe("every screen follows the selected language", () => {
   });
 
   it("request: refusals of the core and the backend, then the signed result", async () => {
-    await handleUrl(`awakehelix://sign?plan=${"A".repeat(32)}`);
+    await handleUrl(`anubisauto://sign?plan=${"A".repeat(32)}`);
     $<HTMLInputElement>("key-source-privateKey").click();
     type("key-private", "0x1234");
     await click("request-load");
@@ -118,12 +118,12 @@ describe("every screen follows the selected language", () => {
   });
 
   it("refused links and the discard dialog", async () => {
-    await handleUrl("awakehelix://sign?plan=xxxxxxxxxxxxxxxxxxxxxxxx&api=https://evil.example");
+    await handleUrl("anubisauto://sign?plan=xxxxxxxxxxxxxxxxxxxxxxxx&api=https://evil.example");
     expectEveryLanguage("foreign website");
     await handleUrl("https://example.com");
-    expectEveryLanguage("not an awakehelix link");
+    expectEveryLanguage("not an anubisauto link");
     await verifiedRequest();
-    const opening = handleUrl(`awakehelix://revoke?plan=${"R".repeat(32)}`);
+    const opening = handleUrl(`anubisauto://revoke?plan=${"R".repeat(32)}`);
     await settle();
     expect($("confirm-dialog").hasAttribute("open")).toBe(true);
     expectEveryLanguage("discard dialog");
@@ -145,7 +145,7 @@ describe("every screen follows the selected language", () => {
       grantRow("0xaa", "frozen_by_dao", { revocable: false }),
     ];
     backend.answers.grants_load = () => ({ ...listing(), rows, scanComplete: false, scanPercent: 40, truncated: true, refreshing: true });
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     await unlockPrivateKey();
     await click("grants-load");
     expect(document.querySelectorAll('[data-testid="grant-row"]')).toHaveLength(rows.length);
@@ -169,7 +169,7 @@ describe("every screen follows the selected language", () => {
     backend.answers.grants_load = () => {
       throw { kind: "refused", message: "x", msg: site("grants.unreadable", "無法讀取鏈上 Grant，請稍後再試。", "Cannot read the grants on chain; try again later.", {}, 503) };
     };
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     await unlockPrivateKey();
     await click("grants-load");
     for (const language of LANGUAGES) {
@@ -191,7 +191,7 @@ describe("every screen follows the selected language", () => {
       [m("login.failed", `Signing in to the website failed. ${unreachable.text}`, { cause: unreachable }), "core.login.failed", "core.website.unreachable"],
       [busy, "core.website.busy", "core.website.busy"],
     ];
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     await unlockPrivateKey();
     for (const [msg, outer, inner] of cases) {
       backend.answers.grants_load = () => {
@@ -216,12 +216,12 @@ describe("every screen follows the selected language", () => {
   });
 
   it("this computer, the save dialog and the forget dialog", async () => {
-    await handleUrl("awakehelix://grants");
+    await handleUrl("anubisauto://grants");
     await unlockPrivateKey();
     await click("grants-load");
     await click("tab-computer");
     expectEveryLanguage("this computer with a key");
-    backend.answers.register_links = () => m("app.linksRegistered", "awakehelix:// links now open this app.");
+    backend.answers.register_links = () => m("app.linksRegistered", "anubisauto:// links now open this app.");
     await click("setup-register");
     expectEveryLanguage("links registered");
     // Saving a key read from a private key as an encrypted keystore.
@@ -246,10 +246,10 @@ describe("every screen follows the selected language", () => {
     backend.answers.ping = () => {
       throw { kind: "refused", message: "x", msg: m("ping.refused", "x", { error: site("check.used", "此驗證已完成；請回到網站查看。", "This check is already confirmed.", {}, 409) }) };
     };
-    await handleUrl(`awakehelix://ping?token=${"P".repeat(32)}`);
+    await handleUrl(`anubisauto://ping?token=${"P".repeat(32)}`);
     expectEveryLanguage("failed install check");
     backend.answers.ping = () => ({ version: "0.5.2", os: "linux", arch: "x86_64", api: API });
-    await handleUrl(`awakehelix://ping?token=${"P".repeat(32)}`);
+    await handleUrl(`anubisauto://ping?token=${"P".repeat(32)}`);
     expectEveryLanguage("linked install check");
   });
 

@@ -145,9 +145,10 @@ impl Core for MockCore {
         api == API
     }
     fn parse_link(&self, url: &str) -> Result<LinkInfo, CommandError> {
-        let action = url.strip_prefix("awakehelix://").and_then(|rest| rest.split('?').next()).unwrap_or_default();
+        let rest = helix_signer_core::links::SCHEMES.iter().find_map(|scheme| url.strip_prefix(&format!("{scheme}://")));
+        let action = rest.and_then(|rest| rest.split('?').next()).unwrap_or_default();
         if !["sign", "revoke", "ping", "grants"].contains(&action) {
-            return Err(refused("Not an awakehelix:// link."));
+            return Err(refused("Not an anubisauto:// link."));
         }
         let api = if url.contains("api=http://127.0.0.1") { "http://127.0.0.1:9".to_string() } else { API.to_string() };
         Ok(LinkInfo { action: action.into(), token: "T".repeat(32), api })
@@ -287,7 +288,7 @@ fn private_key(secret: &str) -> KeyInput {
 }
 
 fn sign_link(controller: &Controller<MockCore>) {
-    controller.open_link(&format!("awakehelix://sign?plan={}", "T".repeat(32))).unwrap();
+    controller.open_link(&format!("anubisauto://sign?plan={}", "T".repeat(32))).unwrap();
 }
 
 #[test]
@@ -368,7 +369,7 @@ fn bad_key_is_refused_and_nothing_is_kept() {
 #[test]
 fn revoke_link_and_grant_edit_rules() {
     let (controller, _, _) = setup();
-    controller.open_link(&format!("awakehelix://revoke?plan={}", "R".repeat(32))).unwrap();
+    controller.open_link(&format!("anubisauto://revoke?plan={}", "R".repeat(32))).unwrap();
     controller.load_key(private_key("good")).unwrap();
     let session = controller.prepare_request().unwrap();
     assert_eq!(session.confirm_word, "REVOKE");
@@ -381,18 +382,18 @@ fn revoke_link_and_grant_edit_rules() {
 #[test]
 fn links_set_the_website_and_ping_is_separate() {
     let (controller, mock, _) = setup();
-    let view = controller.open_link("awakehelix://grants").unwrap();
+    let view = controller.open_link("anubisauto://grants").unwrap();
     assert_eq!((view.action.as_str(), view.official), ("grants", true));
     assert!(controller.open_link("https://evil.example").is_err());
-    let ping = controller.ping(&format!("awakehelix://ping?token={}", "P".repeat(32))).unwrap();
+    let ping = controller.ping(&format!("anubisauto://ping?token={}", "P".repeat(32))).unwrap();
     assert_eq!(ping.version, "0.5.2");
-    assert!(controller.ping("awakehelix://grants").is_err());
+    assert!(controller.ping("anubisauto://grants").is_err());
 
     // Signed in to one website, a link to another drops that session.
     controller.load_key(private_key("good")).unwrap();
     controller.grants_load().unwrap();
     assert_eq!(mock.called("login"), 1);
-    let other = controller.open_link("awakehelix://grants?api=http://127.0.0.1:9").unwrap();
+    let other = controller.open_link("anubisauto://grants?api=http://127.0.0.1:9").unwrap();
     assert!(!other.official);
     assert_eq!(mock.called("logout"), 1);
     assert_eq!(controller.api(), "http://127.0.0.1:9");
@@ -560,7 +561,7 @@ fn one_long_command_at_a_time() {
     let seen = Arc::new(Mutex::new(None));
     let seen_inner = Arc::clone(&seen);
     *mock.on_revoke.lock().unwrap() = Some(Box::new(move |_| {
-        *seen_inner.lock().unwrap() = Some((inner.is_busy(), inner.grants_load().map(|_| ()), inner.open_link("awakehelix://grants").map(|_| ())));
+        *seen_inner.lock().unwrap() = Some((inner.is_busy(), inner.grants_load().map(|_| ()), inner.open_link("anubisauto://grants").map(|_| ())));
     }));
     controller.grants_confirm("REVOKE").unwrap();
     let (busy, load, open) = seen.lock().unwrap().take().unwrap();
@@ -585,7 +586,7 @@ fn export_keystore_needs_a_key_and_a_real_password() {
 #[test]
 fn close_request_keeps_the_website() {
     let (controller, _, _) = setup();
-    controller.open_link("awakehelix://sign?plan=x&api=http://127.0.0.1:9").unwrap();
+    controller.open_link("anubisauto://sign?plan=x&api=http://127.0.0.1:9").unwrap();
     controller.close_request().unwrap();
     assert_eq!(controller.api(), "http://127.0.0.1:9");
     controller.load_key(private_key("good")).unwrap();
